@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ドラムシミュレータ</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #1a1a2e;
+      color: #eee;
+      font-family: 'Segoe UI', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px;
+    }
+
+    h1 {
+      font-size: 1.8rem;
+      letter-spacing: 0.1em;
+      margin-bottom: 8px;
+      color: #e94560;
+    }
+
+    .subtitle {
+      font-size: 0.8rem;
+      color: #888;
+      margin-bottom: 28px;
+    }
+
+    /* ---- Drum Kit Layout ---- */
+    .kit {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      max-width: 700px;
+      width: 100%;
+      margin-bottom: 32px;
+    }
+
+    .pad {
+      position: relative;
+      aspect-ratio: 1;
+      border-radius: 14px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-weight: 700;
+      font-size: 0.9rem;
+      letter-spacing: 0.05em;
+      user-select: none;
+      transition: transform 0.05s, box-shadow 0.05s, filter 0.05s;
+      border: 2px solid transparent;
+    }
+
+    .pad .key-hint {
+      font-size: 0.65rem;
+      font-weight: 400;
+      opacity: 0.6;
+      position: absolute;
+      top: 7px;
+      right: 10px;
+    }
+
+    .pad .name {
+      font-size: 0.85rem;
+    }
+
+    .pad:hover { filter: brightness(1.2); }
+
+    .pad.active {
+      transform: scale(0.93);
+      filter: brightness(1.6) saturate(1.4);
+      box-shadow: 0 0 24px currentColor;
+    }
+
+    /* Colors per drum */
+    .pad.kick      { background: #2d1b4e; border-color: #7c3aed; color: #a78bfa; }
+    .pad.snare     { background: #1e3a2f; border-color: #059669; color: #6ee7b7; }
+    .pad.hihat-c   { background: #1e2a3a; border-color: #0284c7; color: #7dd3fc; }
+    .pad.hihat-o   { background: #1e2a3a; border-color: #38bdf8; color: #bae6fd; }
+    .pad.tom-hi    { background: #3a1e1e; border-color: #dc2626; color: #fca5a5; }
+    .pad.tom-mid   { background: #3a2e1e; border-color: #d97706; color: #fcd34d; }
+    .pad.tom-lo    { background: #2a2a1e; border-color: #ca8a04; color: #fde68a; }
+    .pad.crash     { background: #2a1e3a; border-color: #9333ea; color: #d8b4fe; }
+    .pad.ride      { background: #1e3a3a; border-color: #0d9488; color: #99f6e4; }
+    .pad.clap      { background: #3a1e2e; border-color: #db2777; color: #f9a8d4; }
+    .pad.cowbell   { background: #2e2e1e; border-color: #a16207; color: #fef08a; }
+    .pad.rimshot   { background: #1e2e2e; border-color: #475569; color: #94a3b8; }
+
+    /* ---- Sequencer ---- */
+    .sequencer-section {
+      max-width: 700px;
+      width: 100%;
+    }
+
+    .seq-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .seq-header h2 { font-size: 1rem; color: #aaa; }
+
+    .seq-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      padding: 7px 18px;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: filter 0.1s, transform 0.1s;
+    }
+    .btn:hover { filter: brightness(1.2); }
+    .btn:active { transform: scale(0.95); }
+
+    .btn-play  { background: #059669; color: #fff; }
+    .btn-stop  { background: #dc2626; color: #fff; }
+    .btn-clear { background: #374151; color: #ccc; }
+
+    .bpm-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.85rem;
+    }
+
+    .bpm-group input[type=range] {
+      width: 90px;
+      accent-color: #e94560;
+    }
+
+    .bpm-val { min-width: 38px; text-align: right; color: #e94560; font-weight: 700; }
+
+    .seq-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .seq-row {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .seq-label {
+      width: 72px;
+      font-size: 0.72rem;
+      color: #888;
+      text-align: right;
+      padding-right: 6px;
+      flex-shrink: 0;
+    }
+
+    .seq-cells {
+      display: flex;
+      gap: 3px;
+      flex: 1;
+    }
+
+    .seq-cell {
+      flex: 1;
+      height: 26px;
+      border-radius: 5px;
+      background: #252540;
+      border: 1px solid #333;
+      cursor: pointer;
+      transition: background 0.1s;
+      min-width: 0;
+    }
+
+    .seq-cell.on { background: var(--pad-color, #7c3aed); border-color: var(--pad-color, #7c3aed); }
+    .seq-cell.playing { outline: 2px solid #fff; outline-offset: 1px; }
+
+    .seq-cell:nth-child(4n+1) { border-left: 2px solid #444; }
+
+    /* ---- Volume ---- */
+    .volume-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 20px;
+      font-size: 0.85rem;
+      color: #aaa;
+    }
+    .volume-bar input[type=range] {
+      width: 130px;
+      accent-color: #e94560;
+    }
+  </style>
+</head>
+<body>
+
+<h1>🥁 ドラムシミュレータ</h1>
+<p class="subtitle">キーボードまたはクリックで演奏できます</p>
+
+<div class="kit" id="kit"></div>
+
+<div class="sequencer-section">
+  <div class="seq-header">
+    <h2>ステップシーケンサー（16ステップ）</h2>
+    <div class="seq-controls">
+      <div class="bpm-group">
+        <label>BPM</label>
+        <input type="range" id="bpm" min="60" max="200" value="120">
+        <span class="bpm-val" id="bpmVal">120</span>
+      </div>
+      <button class="btn btn-play"  id="btnPlay">▶ 再生</button>
+      <button class="btn btn-stop"  id="btnStop">■ 停止</button>
+      <button class="btn btn-clear" id="btnClear">クリア</button>
+    </div>
+  </div>
+  <div class="seq-grid" id="seqGrid"></div>
+  <div class="volume-bar">
+    <label>音量</label>
+    <input type="range" id="volume" min="0" max="1" step="0.01" value="0.8">
+  </div>
+</div>
+
+<script>
+// ========================
+//  Audio Engine
+// ========================
+const ctx = new (window.AudioContext || window.webkitAudioContext)();
+let masterGain = ctx.createGain();
+masterGain.gain.value = 0.8;
+masterGain.connect(ctx.destination);
+
+function resumeCtx() {
+  if (ctx.state === 'suspended') ctx.resume();
+}
+
+function playBuffer(buffer) {
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(masterGain);
+  src.start();
+}
+
+// Synthesized drum sounds
+function synthKick() {
+  const buf = ctx.createBuffer(1, ctx.sampleRate * 0.5, ctx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    const t = i / ctx.sampleRate;
+    const freq = 150 * Math.exp(-t * 20);
+    data[i] = Math.sin(2 * Math.PI * freq * t) * Math.exp(-t * 8);
+  }
+  return buf;
+}
+
+function synthSnare() {
+  const buf = ctx.createBuffer(1, ctx.sampleRate * 0.25, ctx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    const t = i / ctx.sampleRate;
+    const tone = Math.sin(2 * Math.PI * 200 * t) * 0.4;
+    const noise = (Math.random() * 2 - 1) * 0.6;
+    data[i] = (tone + noise) * Math.exp(-t * 18);
+  }
+  return buf;
+}
+
+function synthHiHat(open = false) {
+  const dur = open ? 0.35 : 0.08;
+  const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    const t = i / ctx.sampleRate;
+    const noise = Math.random() * 2 - 1;
+    // bandpass-ish: multiply by sine cluster
+    const band = Math.sin(2 * Math.PI * 8000 * t) * Math.sin(2 * Math.PI * 5500 * t);
+    data[i] = noise * band * Math.exp(-t * (open ? 6 : 40));
+  }
+  return buf;
+}
+
+function synthTom(freq) {
+  const buf = ctx.createBuffer(1, ctx.sampleRate * 0.4, ctx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    const t = i / ctx.sampleRate;
+    const f = freq * Math.exp(-t * 8);
+    data[i] = Math.sin(2 * Math.PI * f * t) * Math.exp(-t * 10);
+  }
+  return buf;
+}
+
+function synthCrash() {
+  const buf = ctx.createBuffer(1, ctx.sampleRate * 1.2, ctx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    const t = i / ctx.sampleRate;
+    const noise = Math.random() * 2 - 1;
+    data[i] = noise * Math.exp(-t * 3) * (0.5 + 0.5 * Math.sin(2 * Math.PI * 3000 * t));
+  }
+  return buf;
+}
+
+function synthRide() {
+  const buf = ctx.createBuffer(1, ctx.sampleRate * 0.6, ctx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    const t = i / ctx.sampleRate;
+    const ping = Math.sin(2 * Math.PI * 4200 * t) * 0.4;
+    const shimmer = (Math.random() * 2 - 1) * 0.3;
+    data[i] = (ping + shimmer) * Math.exp(-t * 5);
+  }
+  return buf;
+}
+
+function synthClap() {
+  const buf = ctx.createBuffer(1, ctx.sampleRate * 0.15, ctx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    const t = i / ctx.sampleRate;
+    const slap = Math.exp(-t * 40) * (Math.random() * 2 - 1);
+    const body = Math.exp(-t * 15) * (Math.random() * 2 - 1) * 0.5;
+    data[i] = slap + body;
+  }
+  return buf;
+}
+
+function synthCowbell() {
+  const buf = ctx.createBuffer(1, ctx.sampleRate * 0.5, ctx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    const t = i / ctx.sampleRate;
+    data[i] = (
+      Math.sin(2 * Math.PI * 562 * t) * 0.5 +
+      Math.sin(2 * Math.PI * 845 * t) * 0.3 +
+      Math.sin(2 * Math.PI * 1120 * t) * 0.2
+    ) * Math.exp(-t * 8);
+  }
+  return buf;
+}
+
+function synthRimshot() {
+  const buf = ctx.createBuffer(1, ctx.sampleRate * 0.1, ctx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    const t = i / ctx.sampleRate;
+    const click = Math.sin(2 * Math.PI * 1000 * t) * Math.exp(-t * 60);
+    const snap  = (Math.random() * 2 - 1) * Math.exp(-t * 30) * 0.3;
+    data[i] = click + snap;
+  }
+  return buf;
+}
+
+// Pre-bake all buffers
+const buffers = {
+  kick:    synthKick(),
+  snare:   synthSnare(),
+  'hihat-c': synthHiHat(false),
+  'hihat-o': synthHiHat(true),
+  'tom-hi':  synthTom(200),
+  'tom-mid': synthTom(130),
+  'tom-lo':  synthTom(90),
+  crash:   synthCrash(),
+  ride:    synthRide(),
+  clap:    synthClap(),
+  cowbell: synthCowbell(),
+  rimshot: synthRimshot(),
+};
+
+function playDrum(id) {
+  resumeCtx();
+  if (buffers[id]) playBuffer(buffers[id]);
+}
+
+// ========================
+//  Pad Definitions
+// ========================
+const pads = [
+  { id: 'crash',   label: 'Crash',    key: 'T' },
+  { id: 'ride',    label: 'Ride',     key: 'Y' },
+  { id: 'hihat-o', label: 'HH Open',  key: 'U' },
+  { id: 'hihat-c', label: 'HH Close', key: 'I' },
+  { id: 'tom-hi',  label: 'Tom Hi',   key: 'E' },
+  { id: 'tom-mid', label: 'Tom Mid',  key: 'R' },
+  { id: 'tom-lo',  label: 'Tom Low',  key: 'F' },
+  { id: 'rimshot', label: 'Rimshot',  key: 'G' },
+  { id: 'clap',    label: 'Clap',     key: 'C' },
+  { id: 'snare',   label: 'Snare',    key: 'D' },
+  { id: 'cowbell', label: 'Cowbell',  key: 'B' },
+  { id: 'kick',    label: 'Kick',     key: ' ', keyLabel: 'Space' },
+];
+
+const PAD_COLORS = {
+  kick:      '#7c3aed',
+  snare:     '#059669',
+  'hihat-c': '#0284c7',
+  'hihat-o': '#38bdf8',
+  'tom-hi':  '#dc2626',
+  'tom-mid': '#d97706',
+  'tom-lo':  '#ca8a04',
+  crash:     '#9333ea',
+  ride:      '#0d9488',
+  clap:      '#db2777',
+  cowbell:   '#a16207',
+  rimshot:   '#475569',
+};
+
+// ========================
+//  Build Pad DOM
+// ========================
+const kitEl = document.getElementById('kit');
+const keyMap = {};
+
+pads.forEach(({ id, label, key, keyLabel }) => {
+  const pad = document.createElement('div');
+  pad.className = `pad ${id}`;
+  pad.dataset.id = id;
+  pad.innerHTML = `
+    <span class="key-hint">${keyLabel || key}</span>
+    <span class="name">${label}</span>
+  `;
+  pad.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    triggerPad(id);
+  });
+  kitEl.appendChild(pad);
+  keyMap[key.toUpperCase()] = id;
+});
+
+function triggerPad(id) {
+  playDrum(id);
+  const el = document.querySelector(`.pad[data-id="${id}"]`);
+  if (!el) return;
+  el.classList.add('active');
+  clearTimeout(el._timer);
+  el._timer = setTimeout(() => el.classList.remove('active'), 120);
+}
+
+// ========================
+//  Keyboard
+// ========================
+document.addEventListener('keydown', (e) => {
+  if (e.repeat) return;
+  const key = e.key === ' ' ? ' ' : e.key.toUpperCase();
+  const id = keyMap[key];
+  if (id) {
+    if (e.key === ' ') e.preventDefault();
+    triggerPad(id);
+  }
+});
+
+// ========================
+//  Sequencer
+// ========================
+const SEQ_STEPS = 16;
+const seqRows = pads.map(p => ({ id: p.id, label: p.label, steps: new Array(SEQ_STEPS).fill(false) }));
+let seqPlaying = false;
+let currentStep = 0;
+let seqTimer = null;
+
+const seqGridEl = document.getElementById('seqGrid');
+const cellEls = {}; // id -> [cell0..cell15]
+
+seqRows.forEach(row => {
+  const rowEl = document.createElement('div');
+  rowEl.className = 'seq-row';
+
+  const labelEl = document.createElement('div');
+  labelEl.className = 'seq-label';
+  labelEl.textContent = row.label;
+  rowEl.appendChild(labelEl);
+
+  const cellsEl = document.createElement('div');
+  cellsEl.className = 'seq-cells';
+
+  const cells = [];
+  for (let s = 0; s < SEQ_STEPS; s++) {
+    const cell = document.createElement('div');
+    cell.className = 'seq-cell';
+    cell.style.setProperty('--pad-color', PAD_COLORS[row.id] || '#7c3aed');
+    cell.addEventListener('click', () => {
+      row.steps[s] = !row.steps[s];
+      cell.classList.toggle('on', row.steps[s]);
+    });
+    cellsEl.appendChild(cell);
+    cells.push(cell);
+  }
+  cellEls[row.id] = cells;
+
+  rowEl.appendChild(cellsEl);
+  seqGridEl.appendChild(rowEl);
+});
+
+function seqTick() {
+  // Clear previous highlight
+  const prev = (currentStep - 1 + SEQ_STEPS) % SEQ_STEPS;
+  seqRows.forEach(row => {
+    cellEls[row.id][prev].classList.remove('playing');
+    cellEls[row.id][currentStep].classList.add('playing');
+    if (row.steps[currentStep]) playDrum(row.id);
+  });
+  currentStep = (currentStep + 1) % SEQ_STEPS;
+}
+
+function startSeq() {
+  if (seqPlaying) return;
+  resumeCtx();
+  seqPlaying = true;
+  currentStep = 0;
+  const bpm = parseInt(document.getElementById('bpm').value);
+  const interval = (60 / bpm / 4) * 1000; // 16th notes
+  seqTick();
+  seqTimer = setInterval(seqTick, interval);
+}
+
+function stopSeq() {
+  seqPlaying = false;
+  clearInterval(seqTimer);
+  // Clear all playing highlights
+  seqRows.forEach(row => {
+    cellEls[row.id].forEach(c => c.classList.remove('playing'));
+  });
+  currentStep = 0;
+}
+
+document.getElementById('btnPlay').addEventListener('click', startSeq);
+document.getElementById('btnStop').addEventListener('click', stopSeq);
+document.getElementById('btnClear').addEventListener('click', () => {
+  seqRows.forEach(row => {
+    row.steps.fill(false);
+    cellEls[row.id].forEach(c => c.classList.remove('on'));
+  });
+});
+
+// BPM slider - restart if playing
+document.getElementById('bpm').addEventListener('input', (e) => {
+  document.getElementById('bpmVal').textContent = e.target.value;
+  if (seqPlaying) {
+    stopSeq();
+    startSeq();
+  }
+});
+
+// Volume
+document.getElementById('volume').addEventListener('input', (e) => {
+  masterGain.gain.value = parseFloat(e.target.value);
+});
+</script>
+</body>
+</html>
