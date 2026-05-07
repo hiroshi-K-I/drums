@@ -1,0 +1,292 @@
+/* =====================================================
+   DESIGN TOKENS
+===================================================== */
+:root {
+  --bg:        #0a0a0d;
+  --surface:   #131318;
+  --surface-2: #1c1c23;
+  --surface-3: #26262f;
+  --text:      #e2e2ee;
+  --text-dim:  #565668;
+  --text-muted:#2e2e3a;
+  --radius:    10px;
+  --gap:       10px;
+  --mono: 'SF Mono', 'Fira Code', 'Fira Mono', 'Roboto Mono', ui-monospace, monospace;
+}
+
+/* =====================================================
+   RESET
+===================================================== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, sans-serif;
+  line-height: 1.4;
+  -webkit-tap-highlight-color: transparent;
+  overflow-x: hidden;
+}
+
+/* =====================================================
+   APP SHELL
+===================================================== */
+#app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  padding: 12px 14px 20px;
+  gap: 14px;
+}
+
+/* =====================================================
+   HEADER
+===================================================== */
+#header {
+  text-align: center;
+  padding: 6px 0;
+  flex-shrink: 0;
+}
+
+h1 {
+  font-size: clamp(1.1rem, 4vw, 1.9rem);
+  font-weight: 900;
+  letter-spacing: 0.45em;
+  text-indent: 0.45em;
+  background: linear-gradient(150deg, #fff 0%, #888 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+#status {
+  margin-top: 5px;
+  font-size: clamp(0.6rem, 1.5vw, 0.72rem);
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+}
+
+/* =====================================================
+   DRUM GRID
+   Layout (desktop, 5×2):
+     Row 1: crash  tom-h  tom-m  tom-l  ride
+     Row 2: hhatc  hhato  snare  kick   clap
+===================================================== */
+#kit-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  grid-template-rows: repeat(2, 1fr);
+  grid-template-areas:
+    "crash tomh tomm toml ride"
+    "hhatc hhato snare kick clap";
+  gap: var(--gap);
+  flex: 1;
+  max-width: 960px;
+  width: 100%;
+  margin: 0 auto;
+  min-height: 220px;
+}
+
+/* =====================================================
+   PAD
+===================================================== */
+.pad {
+  --ac: #777;   /* accent — overridden per pad */
+
+  background: var(--surface);
+  border: 1.5px solid var(--ac);
+  border-radius: var(--radius);
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px 8px 11px;
+
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+
+  position: relative;
+  overflow: hidden;
+  /* slight inner glow from accent colour */
+  box-shadow: inset 0 0 12px -6px var(--ac);
+  transition: border-color 0.12s;
+}
+
+/* subtle ambient glow on hover */
+.pad:hover {
+  border-color: var(--ac);
+  box-shadow: inset 0 0 20px -6px var(--ac), 0 0 6px -2px var(--ac);
+}
+
+/* hit animation — restarts each trigger via JS reflow trick */
+.pad.active {
+  animation: pad-hit 0.22s ease-out forwards;
+}
+
+@keyframes pad-hit {
+  0% {
+    transform: scale(0.91);
+    box-shadow:
+      inset 0 0 20px -4px var(--ac),
+      0 0 28px -4px var(--ac),
+      0 0 56px -8px var(--ac);
+    border-color: var(--ac);
+  }
+  55% { transform: scale(0.97); }
+  100% {
+    transform: scale(1);
+    box-shadow: inset 0 0 12px -6px var(--ac);
+    border-color: var(--ac);
+  }
+}
+
+/* key-reassign listen state */
+.pad.listening {
+  animation: listen-pulse 0.85s ease-in-out infinite alternate !important;
+}
+
+@keyframes listen-pulse {
+  from { box-shadow: 0 0 0 0 var(--ac), inset 0 0 12px -6px var(--ac); }
+  to   { box-shadow: 0 0 0 8px transparent, inset 0 0 20px -4px var(--ac); }
+}
+
+/* =====================================================
+   PAD CONTENT
+===================================================== */
+.pad-name {
+  font-size: clamp(0.52rem, 1.1vw, 0.68rem);
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: var(--ac);
+  text-align: center;
+  white-space: pre-line;   /* respects \n in textContent */
+  line-height: 1.3;
+  pointer-events: none;
+}
+
+.key-badge {
+  background: var(--surface-3);
+  border: 1px solid var(--surface-3);
+  border-radius: 5px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: clamp(0.58rem, 1.1vw, 0.7rem);
+  font-weight: 600;
+  padding: 2px 8px;
+  min-width: 30px;
+  text-align: center;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.key-badge:hover {
+  background: var(--surface-2);
+  border-color: var(--text-dim);
+}
+
+/* badge in listen mode */
+.pad.listening .key-badge {
+  border-color: var(--ac);
+  color: var(--ac);
+}
+
+/* =====================================================
+   PAD ACCENT COLOURS + GRID AREAS
+   (no hyphens in area names for max compat)
+===================================================== */
+#pad-kick    { grid-area: kick;  --ac: #ef4444; }
+#pad-snare   { grid-area: snare; --ac: #f97316; }
+#pad-hihat-c { grid-area: hhatc; --ac: #06b6d4; }
+#pad-hihat-o { grid-area: hhato; --ac: #22d3ee; }
+#pad-crash   { grid-area: crash; --ac: #eab308; }
+#pad-ride    { grid-area: ride;  --ac: #fbbf24; }
+#pad-tom-h   { grid-area: tomh;  --ac: #a855f7; }
+#pad-tom-m   { grid-area: tomm;  --ac: #9333ea; }
+#pad-tom-l   { grid-area: toml;  --ac: #7c3aed; }
+#pad-clap    { grid-area: clap;  --ac: #22c55e; }
+
+/* =====================================================
+   KEY-REASSIGN OVERLAY
+===================================================== */
+#overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.82);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 300;
+}
+
+#overlay.hidden { display: none; }
+
+#listen-box {
+  background: var(--surface-2);
+  border: 1px solid var(--surface-3);
+  border-radius: 16px;
+  padding: 38px 52px;
+  text-align: center;
+  max-width: 340px;
+  width: 90%;
+}
+
+.listen-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+}
+
+#listen-name {
+  font-size: 1.6rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  color: var(--text);
+  margin-bottom: 18px;
+  white-space: pre-line;
+  line-height: 1.25;
+}
+
+.listen-hint {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+
+/* =====================================================
+   RESPONSIVE — tablet (≤700 px): 3 columns, auto flow
+===================================================== */
+@media (max-width: 700px) {
+  #kit-grid {
+    grid-template-columns: repeat(3, 1fr);
+    grid-template-rows: none;
+    grid-template-areas: none;
+    flex: none;
+    min-height: 0;
+  }
+  /* override per-pad grid-area assignments */
+  .pad { grid-area: auto !important; min-height: 72px; }
+
+  #header { padding: 4px 0; }
+  h1 { letter-spacing: 0.3em; }
+}
+
+/* phone (≤400 px): 2 columns */
+@media (max-width: 400px) {
+  #kit-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .pad { min-height: 66px; padding: 10px 6px 9px; gap: 6px; }
+}
+
+/* tall desktop: give the grid more vertical breathing room */
+@media (min-height: 720px) and (min-width: 701px) {
+  #kit-grid { min-height: 300px; }
+  .pad { padding: 20px 12px 16px; gap: 10px; }
+}

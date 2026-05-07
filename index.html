@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <meta name="theme-color" content="#0a0a0d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Drum Kit</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <header id="header">
+      <h1>DRUM KIT</h1>
+      <p id="status">パッドをタップ / キーを押して演奏 &nbsp;·&nbsp; キーバッジをクリックで変更</p>
+    </header>
+
+    <main id="kit-grid">
+      <!-- pads are built by app.js -->
+    </main>
+  </div>
+
+  <!-- Key-reassign overlay -->
+  <div id="overlay" class="hidden" role="dialog" aria-modal="true" aria-labelledby="listen-name">
+    <div id="listen-box">
+      <p class="listen-label">ASSIGN KEY FOR</p>
+      <p id="listen-name"></p>
+      <p class="listen-hint">Escape またはここをクリックでキャンセル</p>
+    </div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
