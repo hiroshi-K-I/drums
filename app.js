@@ -91,8 +91,8 @@ function ensureAudio() {
   masterOut.threshold.value = -18;
   masterOut.knee.value      =  10;
   masterOut.ratio.value     =   3;
-  masterOut.attack.value    = 0.003;
-  masterOut.release.value   = 0.15;
+  masterOut.attack.value    = 0.008;  // longer attack → initial kick punch gets through
+  masterOut.release.value   = 0.18;
   masterOut.connect(ctx.destination);
   buildNoiseBuf();
 }
@@ -114,30 +114,57 @@ function mkNoise() {
 
 function synthKick(v) {
   const t = ctx.currentTime;
-  const osc = ctx.createOscillator();
-  const env = ctx.createGain();
-  osc.type = 'sine';
-  osc.frequency.setValueAtTime(160, t);
-  osc.frequency.exponentialRampToValueAtTime(38, t + 0.08);
-  env.gain.setValueAtTime(v * 1.5, t);
-  env.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
-  osc.connect(env);
-  env.connect(masterOut);
-  osc.start(t);
-  osc.stop(t + 0.52);
 
-  const click    = mkNoise();
-  const clickHpf = ctx.createBiquadFilter();
-  const clickEnv = ctx.createGain();
-  clickHpf.type = 'highpass';
-  clickHpf.frequency.value = 80;
-  clickEnv.gain.setValueAtTime(v * 0.4, t);
-  clickEnv.gain.exponentialRampToValueAtTime(0.001, t + 0.025);
-  click.connect(clickHpf);
-  clickHpf.connect(clickEnv);
-  clickEnv.connect(masterOut);
-  click.start(t);
-  click.stop(t + 0.03);
+  // Body: slow pitch sweep (120→36Hz / 140ms) — feel the pitch drop as "oom"
+  const body    = ctx.createOscillator();
+  const shaper  = ctx.createWaveShaper();
+  const bodyEnv = ctx.createGain();
+  body.type = 'sine';
+  body.frequency.setValueAtTime(120, t);
+  body.frequency.exponentialRampToValueAtTime(36, t + 0.14);
+  // tanh soft-saturation: adds 3rd/5th harmonics so sub feels heavy on small speakers
+  const shaperCurve = new Float32Array(256);
+  for (let i = 0; i < 256; i++) {
+    const x = (i / 128) - 1;
+    shaperCurve[i] = Math.tanh(x * 2.2);
+  }
+  shaper.curve = shaperCurve;
+  bodyEnv.gain.setValueAtTime(v * 2.5, t);
+  bodyEnv.gain.exponentialRampToValueAtTime(0.001, t + 0.58);
+  body.connect(shaper);
+  shaper.connect(bodyEnv);
+  bodyEnv.connect(masterOut);
+  body.start(t);
+  body.stop(t + 0.62);
+
+  // Sub: sustained low weight (50→28Hz) — the "ン" in "ズンッ"
+  const sub    = ctx.createOscillator();
+  const subEnv = ctx.createGain();
+  sub.type = 'sine';
+  sub.frequency.setValueAtTime(50, t);
+  sub.frequency.exponentialRampToValueAtTime(28, t + 0.5);
+  subEnv.gain.setValueAtTime(v * 0.95, t);
+  subEnv.gain.exponentialRampToValueAtTime(0.001, t + 0.78);
+  sub.connect(subEnv);
+  subEnv.connect(masterOut);
+  sub.start(t);
+  sub.stop(t + 0.82);
+
+  // Thud transient: low-pass noise (≤180Hz) — replaces the old high-pass click
+  // Low-pass = low-frequency thud, NOT high-frequency "click"
+  const thud    = mkNoise();
+  const lpf     = ctx.createBiquadFilter();
+  const thudEnv = ctx.createGain();
+  lpf.type = 'lowpass';
+  lpf.frequency.value = 180;
+  lpf.Q.value = 0.8;
+  thudEnv.gain.setValueAtTime(v * 1.8, t);
+  thudEnv.gain.exponentialRampToValueAtTime(0.001, t + 0.055);
+  thud.connect(lpf);
+  lpf.connect(thudEnv);
+  thudEnv.connect(masterOut);
+  thud.start(t);
+  thud.stop(t + 0.065);
 }
 
 function synthSnare(v) {
