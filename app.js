@@ -1,7 +1,7 @@
 /**
  * Drum Kit — app.js
  * Audio: Web Audio API synthesis, no external files.
- * Views: PAD (grid) and KIT (SVG schematic), toggled by tabs.
+ * Views: PAD (grid), KIT (SVG schematic), MIX (per-instrument volume).
  */
 
 'use strict';
@@ -22,8 +22,9 @@ const PADS = [
   { id: 'clap',    label: 'CLAP',      defaultKey: 'g' },
 ];
 
-const SPACE_ID    = 'kick';
-const STORAGE_KEY = 'drumkit-v1-bindings';
+const SPACE_ID        = 'kick';
+const STORAGE_KEY     = 'drumkit-v1-bindings';
+const VOL_STORAGE_KEY = 'drumkit-v1-volumes';
 
 const PAD_COLORS = {
   'crash':   '#eab308',
@@ -38,8 +39,26 @@ const PAD_COLORS = {
   'clap':    '#22c55e',
 };
 
+// Display order in the mixer
+const MIX_ORDER = ['kick','snare','hihat-c','hihat-o','tom-h','tom-m','tom-l','crash','ride','clap'];
+
+// Pre-balanced defaults: kick/snare/toms louder, cymbals/clap quieter
+const DEFAULT_VOLUMES = {
+  'kick':    1.4,
+  'snare':   1.3,
+  'hihat-c': 1.0,
+  'hihat-o': 1.0,
+  'crash':   0.6,
+  'ride':    0.55,
+  'tom-h':   1.1,
+  'tom-m':   1.3,
+  'tom-l':   1.4,
+  'clap':    0.65,
+};
+
+let padVolumes = { ...DEFAULT_VOLUMES };
+
 // SVG drum kit layout — top-down schematic (viewBox 0 0 560 360)
-// labelDir: 0 = inside shape, 1 = below, -1 = above
 const KIT_LAYOUT = [
   { id: 'crash',   cx:  88, cy:  52, rx: 65, ry: 13, type: 'cymbal', labelDir:  1 },
   { id: 'ride',    cx: 462, cy:  60, rx: 65, ry: 13, type: 'cymbal', labelDir:  1 },
@@ -69,11 +88,11 @@ function ensureAudio() {
   }
   ctx = new (window.AudioContext || window.webkitAudioContext)();
   masterOut = ctx.createDynamicsCompressor();
-  masterOut.threshold.value = -20;
-  masterOut.knee.value      =   8;
+  masterOut.threshold.value = -18;
+  masterOut.knee.value      =  10;
   masterOut.ratio.value     =   3;
   masterOut.attack.value    = 0.003;
-  masterOut.release.value   = 0.12;
+  masterOut.release.value   = 0.15;
   masterOut.connect(ctx.destination);
   buildNoiseBuf();
 }
@@ -91,10 +110,7 @@ function mkNoise() {
   return src;
 }
 
-// ------------------------------------------------------------------
-// Volume table — applied per-instrument relative to base synth level
-// Kick/Snare/TomMid/TomLo: +30%  |  Crash/Ride/Clap: -30%
-// ------------------------------------------------------------------
+// --- Synth functions use neutral gain levels; balance comes from padVolumes ---
 
 function synthKick(v) {
   const t = ctx.currentTime;
@@ -103,7 +119,7 @@ function synthKick(v) {
   osc.type = 'sine';
   osc.frequency.setValueAtTime(160, t);
   osc.frequency.exponentialRampToValueAtTime(38, t + 0.08);
-  env.gain.setValueAtTime(v * 1.95, t);   // +30% from 1.5
+  env.gain.setValueAtTime(v * 1.5, t);
   env.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
   osc.connect(env);
   env.connect(masterOut);
@@ -115,7 +131,7 @@ function synthKick(v) {
   const clickEnv = ctx.createGain();
   clickHpf.type = 'highpass';
   clickHpf.frequency.value = 80;
-  clickEnv.gain.setValueAtTime(v * 0.52, t);  // +30% from 0.4
+  clickEnv.gain.setValueAtTime(v * 0.4, t);
   clickEnv.gain.exponentialRampToValueAtTime(0.001, t + 0.025);
   click.connect(clickHpf);
   clickHpf.connect(clickEnv);
@@ -132,7 +148,7 @@ function synthSnare(v) {
   bpf.frequency.value = 260;
   bpf.Q.value = 0.9;
   const ng = ctx.createGain();
-  ng.gain.setValueAtTime(v * 0.975, t);   // +30% from 0.75
+  ng.gain.setValueAtTime(v * 0.75, t);
   ng.gain.exponentialRampToValueAtTime(0.001, t + 0.19);
   src.connect(bpf);
   bpf.connect(ng);
@@ -145,7 +161,7 @@ function synthSnare(v) {
   const tg = ctx.createGain();
   osc.frequency.setValueAtTime(210, t);
   osc.frequency.exponentialRampToValueAtTime(110, t + 0.1);
-  tg.gain.setValueAtTime(v * 0.624, t);   // +30% from 0.48
+  tg.gain.setValueAtTime(v * 0.48, t);
   tg.gain.exponentialRampToValueAtTime(0.001, t + 0.13);
   osc.connect(tg);
   tg.connect(masterOut);
@@ -203,7 +219,7 @@ function synthCrash(v) {
   const t = ctx.currentTime;
   const src = mkNoise();
   const env = ctx.createGain();
-  env.gain.setValueAtTime(v * 0.385, t);  // -30% from 0.55
+  env.gain.setValueAtTime(v * 0.55, t);
   env.gain.exponentialRampToValueAtTime(0.001, t + 2.6);
   [380, 760, 1520].forEach(freq => {
     const bpf = ctx.createBiquadFilter();
@@ -222,7 +238,7 @@ function synthRide(v) {
   const t = ctx.currentTime;
   const src = mkNoise();
   const env = ctx.createGain();
-  env.gain.setValueAtTime(v * 0.315, t);  // -30% from 0.45
+  env.gain.setValueAtTime(v * 0.45, t);
   env.gain.exponentialRampToValueAtTime(0.001, t + 1.9);
   [560, 1120, 2240].forEach(freq => {
     const bpf = ctx.createBiquadFilter();
@@ -263,7 +279,7 @@ function synthClap(v) {
     bpf.Q.value = 0.75;
     const env = ctx.createGain();
     env.gain.setValueAtTime(0.001, t + off);
-    env.gain.linearRampToValueAtTime(v * 0.574, t + off + 0.003);  // -30% from 0.82
+    env.gain.linearRampToValueAtTime(v * 0.82, t + off + 0.003);
     env.gain.exponentialRampToValueAtTime(0.001, t + off + 0.065);
     src.connect(bpf);
     bpf.connect(env);
@@ -281,8 +297,8 @@ const SYNTHS = {
   'crash':   synthCrash,
   'ride':    synthRide,
   'tom-h':   v => synthTom(300, 148, 0.30, v),
-  'tom-m':   v => synthTom(200,  96, 0.36, v * 1.3),  // +30%
-  'tom-l':   v => synthTom(118,  56, 0.52, v * 1.3),  // +30%
+  'tom-m':   v => synthTom(200,  96, 0.36, v),
+  'tom-l':   v => synthTom(118,  56, 0.52, v),
   'clap':    synthClap,
 };
 
@@ -290,16 +306,34 @@ function trigger(id, velocity = 0.85) {
   ensureAudio();
   const fn = SYNTHS[id];
   if (!fn) return;
-  const v = Math.min(1.0, velocity * (0.88 + Math.random() * 0.24));
+  const vol = padVolumes[id] ?? 1.0;
+  const v = velocity * (0.88 + Math.random() * 0.24) * vol;
   fn(v);
   flashPad(id);
+}
+
+// =====================================================================
+// VOLUME STATE
+// =====================================================================
+
+function loadVolumes() {
+  try {
+    const raw = localStorage.getItem(VOL_STORAGE_KEY);
+    padVolumes = { ...DEFAULT_VOLUMES, ...(raw ? JSON.parse(raw) : {}) };
+  } catch (_) {
+    padVolumes = { ...DEFAULT_VOLUMES };
+  }
+}
+
+function saveVolumes() {
+  try { localStorage.setItem(VOL_STORAGE_KEY, JSON.stringify(padVolumes)); } catch (_) {}
 }
 
 // =====================================================================
 // KEY BINDINGS
 // =====================================================================
 
-let bindings = {};
+let bindings  = {};
 let listening = null;
 
 function defaultBindings() {
@@ -370,6 +404,7 @@ function handleAssign(e) {
 function switchView(view) {
   document.getElementById('kit-grid').classList.toggle('hidden', view !== 'pad');
   document.getElementById('kit-view').classList.toggle('hidden', view !== 'kit');
+  document.getElementById('mix-view').classList.toggle('hidden', view !== 'mix');
   document.querySelectorAll('.view-tab').forEach(t =>
     t.classList.toggle('active', t.dataset.view === view)
   );
@@ -387,36 +422,34 @@ function svgEl(tag, attrs = {}) {
   return e;
 }
 
-// Build all gradient + filter defs
 function kitDefs() {
   const defs = svgEl('defs');
 
-  // Helper: radialGradient with objectBoundingBox coords
+  // gradientUnits="objectBoundingBox" makes each gradient relative to its element's bounding box
   function rg(id, cx, cy, r, stops) {
-    const g = svgEl('radialGradient', { id, cx, cy, r });
+    const g = svgEl('radialGradient', { id, cx, cy, r, gradientUnits: 'objectBoundingBox' });
     for (const [offset, color, opacity] of stops) {
       const s = svgEl('stop', { offset });
       s.setAttribute('stop-color', color);
-      if (opacity != null) s.setAttribute('stop-opacity', opacity);
+      if (opacity != null) s.setAttribute('stop-opacity', String(opacity));
       g.append(s);
     }
     return g;
   }
 
-  // Helper: linearGradient (top→bottom by default)
   function lg(id, x1, y1, x2, y2, stops) {
-    const g = svgEl('linearGradient', { id, x1, y1, x2, y2 });
+    const g = svgEl('linearGradient', { id, x1, y1, x2, y2, gradientUnits: 'objectBoundingBox' });
     for (const [offset, color, opacity] of stops) {
       const s = svgEl('stop', { offset });
       s.setAttribute('stop-color', color);
-      if (opacity != null) s.setAttribute('stop-opacity', opacity);
+      if (opacity != null) s.setAttribute('stop-opacity', String(opacity));
       g.append(s);
     }
     return g;
   }
 
   defs.append(
-    // Drum head: mylar, cream with center hot-spot
+    // Drum head: mylar cream, lit upper-left
     rg('g-head', '38%', '32%', '66%', [
       ['0%',   '#f0ece2'],
       ['45%',  '#d4cfC4'],
@@ -429,21 +462,21 @@ function kitDefs() {
       ['100%', '#0c0c0c'],
     ]),
 
-    // Chrome rim highlight
+    // Chrome rim
     rg('g-chrome', '32%', '26%', '74%', [
       ['0%',   '#e8e8e8'],
       ['40%',  '#b0b0b0'],
       ['100%', '#484848'],
     ]),
 
-    // Cymbal body: warm brass, top-lit
+    // Cymbal: warm brass top→bottom
     lg('g-cymbal', '0', '0', '0', '1', [
       ['0%',   '#f5d85a'],
       ['38%',  '#c49018'],
       ['100%', '#5e3600'],
     ]),
 
-    // Cymbal bell: bright gold
+    // Bell: bright gold top→bottom
     lg('g-bell', '0', '0', '0', '1', [
       ['0%',   '#fffaa8'],
       ['55%',  '#d8a828'],
@@ -454,19 +487,18 @@ function kitDefs() {
   return defs;
 }
 
-// Draw a drum (snare, tom, kick)
 function drawDrum(g, cx, cy, rx, ry, isKick) {
-  const pad = isKick ? 9 : 6;
+  const pad  = isKick ? 9 : 6;
   const lugs = isKick ? 8 : 6;
 
-  // Cast shadow on rug
+  // Cast shadow
   g.append(svgEl('ellipse', {
     cx, cy: cy + Math.round(ry * 0.16),
     rx: Math.round(rx * 1.08), ry: Math.round(ry * 0.32),
     fill: '#000', 'fill-opacity': '0.42',
   }));
 
-  // Shell (dark, chrome edge)
+  // Shell
   g.append(svgEl('ellipse', {
     cx, cy, rx, ry,
     fill: 'url(#g-shell)',
@@ -474,21 +506,21 @@ function drawDrum(g, cx, cy, rx, ry, isKick) {
     'stroke-width': '5',
   }));
 
-  // Drum head (cream gradient)
+  // Drum head
   const hx = rx - pad, hy = ry - pad;
   g.append(svgEl('ellipse', {
     cx, cy, rx: hx, ry: hy,
     fill: 'url(#g-head)',
   }));
 
-  // Head sheen — small bright oval, upper-left
+  // Sheen highlight
   g.append(svgEl('ellipse', {
     cx: cx - hx * 0.22, cy: cy - hy * 0.26,
     rx: hx * 0.28, ry: hy * 0.22,
     fill: 'rgba(255,255,255,0.28)',
   }));
 
-  // Head ring (tension rod ring visible around head)
+  // Head ring
   g.append(svgEl('ellipse', {
     cx, cy, rx: hx, ry: hy,
     fill: 'none',
@@ -496,30 +528,24 @@ function drawDrum(g, cx, cy, rx, ry, isKick) {
     'stroke-width': '1.5',
   }));
 
-  // Lug bolts around the rim
+  // Lug bolts
   for (let i = 0; i < lugs; i++) {
     const a = (i / lugs) * 2 * Math.PI - Math.PI / 2;
     g.append(svgEl('circle', {
       cx: Math.round(cx + (rx - 2) * Math.cos(a)),
       cy: Math.round(cy + (ry - 2) * Math.sin(a)),
       r: 2.2,
-      fill: '#cacaca',
-      stroke: '#707070',
-      'stroke-width': '0.5',
+      fill: '#cacaca', stroke: '#707070', 'stroke-width': '0.5',
     }));
   }
 
-  // Kick extras
+  // Kick-specific details
   if (isKick) {
-    // Bass port hole (right-center of head)
     g.append(svgEl('ellipse', {
       cx: cx + hx * 0.34, cy,
       rx: Math.round(hx * 0.2), ry: Math.round(hy * 0.25),
-      fill: '#080808',
-      stroke: '#2a2a2a',
-      'stroke-width': '1.5',
+      fill: '#080808', stroke: '#2a2a2a', 'stroke-width': '1.5',
     }));
-    // Beater strike mark (center-left)
     g.append(svgEl('circle', {
       cx: cx - hx * 0.12, cy,
       r: Math.round(Math.min(hx, hy) * 0.1),
@@ -527,39 +553,35 @@ function drawDrum(g, cx, cy, rx, ry, isKick) {
     }));
   }
 
-  // Accent color tint on head (very subtle identity colour)
+  // Accent tint
   g.append(svgEl('ellipse', {
     cx, cy, rx: hx, ry: hy,
     fill: 'var(--ac)', 'fill-opacity': '0.09',
   }));
 }
 
-// Draw a cymbal (crash, ride, hi-hat)
 function drawCymbal(g, cx, cy, rx, ry) {
-  // Cast shadow
+  // Shadow
   g.append(svgEl('ellipse', {
     cx, cy: cy + 4,
     rx: rx + 3, ry: Math.round(ry * 1.6),
     fill: '#000', 'fill-opacity': '0.35',
   }));
 
-  // Main body (brass gradient)
+  // Body
   g.append(svgEl('ellipse', {
     cx, cy, rx, ry,
     fill: 'url(#g-cymbal)',
-    stroke: '#3a2000',
-    'stroke-width': '0.8',
+    stroke: '#3a2000', 'stroke-width': '0.8',
   }));
 
-  // Texture rings (concentric, simulate cymbal grooves)
+  // Groove rings
   for (const s of [0.87, 0.73, 0.58, 0.44, 0.29]) {
     g.append(svgEl('ellipse', {
       cx, cy,
-      rx: Math.round(rx * s),
-      ry: Math.round(ry * s),
+      rx: Math.round(rx * s), ry: Math.round(ry * s),
       fill: 'none',
-      stroke: 'rgba(0,0,0,0.25)',
-      'stroke-width': '0.6',
+      stroke: 'rgba(0,0,0,0.25)', 'stroke-width': '0.6',
     }));
   }
 
@@ -568,8 +590,7 @@ function drawCymbal(g, cx, cy, rx, ry) {
   g.append(svgEl('ellipse', {
     cx, cy, rx: bx, ry: by,
     fill: 'url(#g-bell)',
-    stroke: '#7a4800',
-    'stroke-width': '0.7',
+    stroke: '#7a4800', 'stroke-width': '0.7',
   }));
 
   // Center mount hole
@@ -579,7 +600,7 @@ function drawCymbal(g, cx, cy, rx, ry) {
     fill: '#1a0e00',
   }));
 
-  // Specular highlight — upper-left arc
+  // Specular highlight
   g.append(svgEl('ellipse', {
     cx: cx - rx * 0.3, cy: cy - ry * 0.22,
     rx: rx * 0.2, ry: ry * 0.58,
@@ -594,42 +615,31 @@ function drawCymbal(g, cx, cy, rx, ry) {
   }));
 }
 
-// Draw the electronic clap pad
 function drawClap(g, cx, cy, rx, ry) {
   const x = cx - rx, y = cy - ry, w = rx * 2, h = ry * 2;
 
-  // Shadow
   g.append(svgEl('rect', {
     x: x + 2, y: y + 4, width: w, height: h,
     rx: 7, fill: '#000', 'fill-opacity': '0.4',
   }));
 
-  // Outer casing
   g.append(svgEl('rect', {
-    x, y, width: w, height: h,
-    rx: 6,
-    fill: '#1a1e1a',
-    stroke: 'var(--ac)',
-    'stroke-width': '1.5',
+    x, y, width: w, height: h, rx: 6,
+    fill: '#1a1e1a', stroke: 'var(--ac)', 'stroke-width': '1.5',
   }));
 
-  // Inner pad surface (rubber feel)
   const inset = 5;
   g.append(svgEl('rect', {
     x: x + inset, y: y + inset,
-    width: w - inset * 2, height: h - inset * 2,
-    rx: 3,
+    width: w - inset * 2, height: h - inset * 2, rx: 3,
     fill: '#111611',
   }));
 
-  // LED indicator dot (top-right corner)
   const ldx = cx + rx - 10, ldy = cy - ry + 8;
   g.append(svgEl('circle', { cx: ldx, cy: ldy, r: 3, fill: 'var(--ac)', 'fill-opacity': '0.9' }));
-  // LED glow ring
   g.append(svgEl('circle', { cx: ldx, cy: ldy, r: 5, fill: 'none', stroke: 'var(--ac)', 'stroke-width': '1', 'stroke-opacity': '0.4' }));
 }
 
-// Add name + key badge labels to a kit item group
 function addLabels(g, item, label, keyTxt) {
   let nameY, badgeY;
   if (item.labelDir === 0) {
@@ -645,12 +655,10 @@ function addLabels(g, item, label, keyTxt) {
 
   const nameEl = svgEl('text', {
     x: item.cx, y: nameY,
-    class: 'kit-name',
-    'text-anchor': 'middle',
+    class: 'kit-name', 'text-anchor': 'middle',
   });
   nameEl.textContent = label;
 
-  // Badge background + text (clickable for key reassignment)
   const bw = Math.max(22, keyTxt.length * 7 + 10);
   const bh = 14;
   const badgeBg = svgEl('rect', {
@@ -680,16 +688,10 @@ function buildKitView() {
 
   svg.append(kitDefs());
 
-  // Drum rug — subtle floor indicator
+  // Drum rug
   svg.append(svgEl('ellipse', {
     cx: 280, cy: 252, rx: 238, ry: 118,
     fill: '#12100e', stroke: '#2a2420', 'stroke-width': '1',
-  }));
-
-  // Hi-hat stand connector between the two cymbal positions
-  svg.append(svgEl('line', {
-    x1: 76, y1: 150, x2: 76, y2: 150,
-    stroke: '#444', 'stroke-width': '2',
   }));
 
   for (const item of KIT_LAYOUT) {
@@ -708,7 +710,7 @@ function buildKitView() {
 
     const { cx, cy, rx, ry, type } = item;
 
-    if (type === 'cymbal')      drawCymbal(g, cx, cy, rx, ry);
+    if      (type === 'cymbal') drawCymbal(g, cx, cy, rx, ry);
     else if (type === 'kick')   drawDrum(g, cx, cy, rx, ry, true);
     else if (type === 'drum')   drawDrum(g, cx, cy, rx, ry, false);
     else                        drawClap(g, cx, cy, rx, ry);
@@ -736,6 +738,87 @@ function initKitView() {
     const item = e.target.closest('.kit-item');
     if (item) { e.preventDefault(); trigger(item.dataset.id); }
   });
+}
+
+// =====================================================================
+// MIXER VIEW
+// =====================================================================
+
+function updateSliderFill(slider) {
+  const pct = ((slider.value - slider.min) / (slider.max - slider.min)) * 100;
+  slider.style.setProperty('--pct', `${pct.toFixed(1)}%`);
+}
+
+function buildMixerView() {
+  const container = document.getElementById('mix-view');
+
+  const resetAllBtn = document.createElement('button');
+  resetAllBtn.className = 'mix-reset-all';
+  resetAllBtn.textContent = 'RESET ALL';
+  resetAllBtn.addEventListener('click', () => {
+    padVolumes = { ...DEFAULT_VOLUMES };
+    saveVolumes();
+    container.querySelectorAll('.mix-slider').forEach(sl => {
+      const def = DEFAULT_VOLUMES[sl.dataset.id] ?? 1.0;
+      sl.value = String(Math.round(def * 100));
+      updateSliderFill(sl);
+      sl.closest('.mix-row').querySelector('.mix-val').textContent =
+        `${Math.round(def * 100)}%`;
+    });
+  });
+  container.append(resetAllBtn);
+
+  for (const id of MIX_ORDER) {
+    const p     = PADS.find(p => p.id === id);
+    const color = PAD_COLORS[id];
+    const vol   = padVolumes[id] ?? 1.0;
+
+    const row = document.createElement('div');
+    row.className = 'mix-row';
+
+    const label = document.createElement('span');
+    label.className = 'mix-label';
+    label.textContent = p.label.replace('\n', ' ');
+    label.style.color = color;
+
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.className = 'mix-slider';
+    slider.min = '0';
+    slider.max = '200';
+    slider.step = '5';
+    slider.value = String(Math.round(vol * 100));
+    slider.dataset.id = id;
+    slider.style.setProperty('--ac', color);
+    updateSliderFill(slider);
+
+    const valDisplay = document.createElement('span');
+    valDisplay.className = 'mix-val';
+    valDisplay.textContent = `${Math.round(vol * 100)}%`;
+
+    const resetBtn = document.createElement('button');
+    resetBtn.className = 'mix-reset';
+    resetBtn.textContent = '↺';
+    resetBtn.title = 'Reset to default';
+    resetBtn.addEventListener('click', () => {
+      const def = DEFAULT_VOLUMES[id] ?? 1.0;
+      padVolumes[id] = def;
+      slider.value = String(Math.round(def * 100));
+      updateSliderFill(slider);
+      valDisplay.textContent = `${Math.round(def * 100)}%`;
+      saveVolumes();
+    });
+
+    slider.addEventListener('input', () => {
+      padVolumes[id] = parseInt(slider.value) / 100;
+      valDisplay.textContent = `${slider.value}%`;
+      updateSliderFill(slider);
+      saveVolumes();
+    });
+
+    row.append(label, slider, valDisplay, resetBtn);
+    container.append(row);
+  }
 }
 
 // =====================================================================
@@ -842,8 +925,10 @@ function stopListening() {
 
 document.addEventListener('DOMContentLoaded', () => {
   loadBindings();
+  loadVolumes();
   buildPads();
   initKitView();
+  buildMixerView();
 
   document.addEventListener('keydown', onKeyDown);
   document.querySelectorAll('.view-tab').forEach(btn =>
