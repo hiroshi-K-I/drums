@@ -14,11 +14,18 @@
     <header id="header">
       <h1>DRUM KIT</h1>
       <p id="status">パッドをタップ / キーを押して演奏 &nbsp;·&nbsp; キーバッジをクリックで変更</p>
+      <div id="view-tabs">
+        <button class="view-tab active" data-view="pad">PAD</button>
+        <button class="view-tab" data-view="kit">KIT</button>
+      </div>
     </header>
 
     <main id="kit-grid">
       <!-- pads are built by app.js -->
     </main>
+    <div id="kit-view" class="hidden">
+      <!-- SVG drum kit is built by app.js -->
+    </div>
   </div>
 
   <!-- Key-reassign overlay -->
