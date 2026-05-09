@@ -18,6 +18,13 @@
         <button class="view-tab active" data-view="pad">PAD</button>
         <button class="view-tab" data-view="kit">KIT</button>
         <button class="view-tab" data-view="mix">MIX</button>
+        <button class="view-tab" data-view="seq">SEQ</button>
+      </div>
+      <div id="preset-row">
+        <button class="preset-btn active" data-preset="acoustic">ACOUSTIC</button>
+        <button class="preset-btn" data-preset="808">808</button>
+        <button class="preset-btn" data-preset="lofi">LO-FI</button>
+        <button class="preset-btn" data-preset="elec">ELEC</button>
       </div>
     </header>
 
@@ -28,7 +35,10 @@
       <!-- SVG drum kit is built by app.js -->
     </div>
     <div id="mix-view" class="hidden">
-      <!-- volume mixer is built by app.js -->
+      <!-- volume mixer + FX is built by app.js -->
+    </div>
+    <div id="seq-view" class="hidden">
+      <!-- step sequencer is built by app.js -->
     </div>
   </div>
 
