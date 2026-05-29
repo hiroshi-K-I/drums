@@ -820,11 +820,169 @@ h1 {
 }
 .seq-step.beat-start { background: #1e1e26; }
 .seq-step.on { background: var(--ac); border-color: var(--ac); }
+/* velocity levels */
+.seq-step.vel-1 { opacity: 0.4; }
+.seq-step.vel-2 { opacity: 0.82; }
+.seq-step.vel-3 { opacity: 1; box-shadow: 0 0 9px -1px var(--ac); }
 .seq-step.current { border-color: rgba(255,255,255,0.65); }
-.seq-step.on.current { background: #fff; border-color: #fff; }
+.seq-step.on.current { background: #fff; border-color: #fff; opacity: 1; }
+
+/* =====================================================
+   SEQ — banks / song / rec / demo / share / legend
+===================================================== */
+.seq-transport-2 { margin-top: -2px; }
+
+.bank-tabs { display: flex; gap: 3px; }
+.bank-tab {
+  width: 28px; height: 26px;
+  background: var(--surface-3);
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+.bank-tab:hover { color: var(--text); }
+.bank-tab.active {
+  background: var(--surface-2);
+  border-color: #a855f7;
+  color: #c98bff;
+}
+
+.seq-toggle-btn.on {
+  background: #2a2350;
+  border-color: #a855f7;
+  color: #c98bff;
+}
+.seq-rec-btn.on {
+  background: #311616;
+  border-color: #ef4444;
+  color: #ef4444;
+  animation: rec-blink 1s steps(2, start) infinite;
+}
+@keyframes rec-blink { 50% { opacity: 0.55; } }
+
+.seq-select {
+  background: var(--surface-3);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 5px 8px;
+  cursor: pointer;
+  outline: none;
+}
+.seq-select:hover { color: var(--text); }
+
+.seq-share-btn:hover {
+  background: var(--surface-2);
+  border-color: #22d3ee;
+  color: #22d3ee;
+}
+
+.seq-legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 0.54rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  padding: 0 4px;
+}
+.lg-swatch {
+  width: 11px; height: 11px;
+  border-radius: 3px;
+  background: #a855f7;
+  margin-left: 8px;
+}
+.lg-swatch.lg-ghost  { opacity: 0.4; }
+.lg-swatch.lg-normal { opacity: 0.82; }
+.lg-swatch.lg-accent { opacity: 1; box-shadow: 0 0 7px -1px #a855f7; }
+.lg-hint { margin-left: 10px; color: var(--text-muted); letter-spacing: 0.04em; }
+
+/* =====================================================
+   VIZ VIEW
+===================================================== */
+#viz-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 60vh;
+  width: 100%;
+}
+#viz-view.hidden { display: none !important; }
+
+#viz-canvas {
+  width: 100%;
+  max-width: 760px;
+  height: 62vh;
+  border-radius: 14px;
+  background:
+    radial-gradient(ellipse at center, #14141c 0%, #08080b 80%);
+  box-shadow: inset 0 0 60px -20px #000, 0 0 1px #26262f;
+}
+
+#viz-hint {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  color: var(--text-dim);
+  letter-spacing: 0.06em;
+}
+
+/* =====================================================
+   PARTICLE BURST OVERLAY
+===================================================== */
+#burst-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 200;
+}
+
+/* =====================================================
+   TOAST
+===================================================== */
+#toast {
+  position: fixed;
+  left: 50%;
+  bottom: 26px;
+  transform: translateX(-50%) translateY(20px);
+  background: var(--surface-2);
+  border: 1px solid var(--surface-3);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 10px 18px;
+  box-shadow: 0 8px 30px -8px #000;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s, transform 0.2s;
+  z-index: 400;
+}
+#toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
 
 @media (max-width: 700px) {
   .seq-step { min-height: 20px; }
   .seq-transport { gap: 7px; padding: 8px 10px; }
   .seq-bpm-display { font-size: 1.1rem; min-width: 40px; }
+  #viz-canvas { height: 52vh; }
+  .seq-legend { flex-wrap: wrap; }
 }

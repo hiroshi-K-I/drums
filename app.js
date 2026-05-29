@@ -27,7 +27,7 @@ const SPACE_ID        = 'kick';
 const STORAGE_KEY     = 'drumkit-v1-bindings';
 const VOL_STORAGE_KEY = 'drumkit-v1-volumes';
 const FX_STORAGE_KEY  = 'drumkit-v1-fx';
-const SEQ_STORAGE_KEY = 'drumkit-v1-seq';
+const SEQ_STORAGE_KEY = 'drumkit-v2-seq';   // v2: banks + velocity
 const PRESET_KEY      = 'drumkit-v1-preset';
 
 const PAD_COLORS = {
@@ -66,6 +66,11 @@ let noiseBuf   = null;
 let openHatEnv = null;
 let masterOut  = null;
 
+// Analyser tapped off masterOut — drives the visualizer
+let analyser   = null;
+let freqData   = null;
+let timeData   = null;
+
 // FX nodes (initialised in setupFX after ctx is created)
 let reverbSend     = null;
 let reverbNode     = null;
@@ -91,6 +96,15 @@ function ensureAudio() {
   masterOut.attack.value    = 0.008;
   masterOut.release.value   = 0.18;
   masterOut.connect(ctx.destination);
+
+  // Analyser as a terminal tap — lets the visualizer read live audio
+  analyser = ctx.createAnalyser();
+  analyser.fftSize = 1024;
+  analyser.smoothingTimeConstant = 0.78;
+  freqData = new Uint8Array(analyser.frequencyBinCount);
+  timeData = new Uint8Array(analyser.fftSize);
+  masterOut.connect(analyser);
+
   buildNoiseBuf();
   setupFX();
   applyPreset(activePreset); // LO-FI needs ctx to build curve
@@ -654,7 +668,10 @@ function trigger(id, velocity = 0.85, at = null) {
   const vol = padVolumes[id] ?? 1.0;
   const v   = velocity * (0.88 + Math.random() * 0.24) * vol;
   fn(v, at !== null ? at : ctx.currentTime);
-  if (at === null) flashPad(id);
+  if (at === null) {
+    flashPad(id);
+    if (recOn && seqPlaying) recordHit(id);
+  }
 }
 
 // =====================================================================
@@ -662,10 +679,25 @@ function trigger(id, velocity = 0.85, at = null) {
 // =====================================================================
 
 const SEQ_STEPS   = 16;
+const NUM_BANKS   = 4;
+const BANK_NAMES  = ['A', 'B', 'C', 'D'];
 const LOOK_AHEAD  = 0.12;   // seconds to schedule ahead
 const SCHED_MS    = 25;     // scheduler poll interval (ms)
 
-let seqPattern  = Object.fromEntries(MIX_ORDER.map(id => [id, new Array(SEQ_STEPS).fill(false)]));
+// Per-step velocity levels: 0 = off, 1 = ghost, 2 = normal, 3 = accent
+const VEL = [0, 0.45, 0.9, 1.28];
+// Click cycle order: off → normal → accent → ghost → off
+const VEL_CYCLE = { 0: 2, 2: 3, 3: 1, 1: 0 };
+
+function makeEmptyBank() {
+  return Object.fromEntries(MIX_ORDER.map(id => [id, new Array(SEQ_STEPS).fill(0)]));
+}
+
+let banks       = Array.from({ length: NUM_BANKS }, makeEmptyBank);
+let editBank    = 0;   // bank shown in the grid
+let playBank    = 0;   // bank currently sounding (may differ in SONG mode)
+let songOn      = false;
+let recOn       = false;
 let seqBpm      = 120;
 let seqSwing    = 0;   // 0-50 (% of 16th note pushed late for odd steps)
 let seqPlaying  = false;
@@ -677,24 +709,50 @@ let tapTimes    = [];
 
 function stepDur() { return 60 / seqBpm / 4; } // 16th note in seconds
 
+// --- SONG mode helpers: cycle through banks that contain notes ---
+function bankHasNotes(i) { return MIX_ORDER.some(id => banks[i][id].some(v => v > 0)); }
+function songBankList() {
+  const l = [];
+  for (let i = 0; i < NUM_BANKS; i++) if (bankHasNotes(i)) l.push(i);
+  return l.length ? l : [editBank];
+}
+function nextSongBank(cur) {
+  const l = songBankList();
+  const idx = l.indexOf(cur);
+  return l[(idx + 1) % l.length];
+}
+
 function seqSchedule() {
   if (!ctx || !seqPlaying) return;
   while (seqNextTime < ctx.currentTime + LOOK_AHEAD) {
-    const dur  = stepDur();
-    const isOdd = (seqStep % 2) === 1;
+    const dur    = stepDur();
+    const isOdd  = (seqStep % 2) === 1;
     const playAt = seqNextTime + (isOdd ? dur * (seqSwing / 100) * 0.5 : 0);
+    const bank   = banks[playBank];
 
     MIX_ORDER.forEach(id => {
-      if (seqPattern[id][seqStep]) trigger(id, 0.85, playAt);
+      const lv = bank[id][seqStep];
+      if (lv > 0) trigger(id, VEL[lv], playAt);
     });
 
-    // Schedule visual update
-    const visualDelay = Math.max(0, (playAt - ctx.currentTime) * 1000);
+    // Schedule synchronized visuals (step cursor, song-follow, bursts)
+    const visualDelay  = Math.max(0, (playAt - ctx.currentTime) * 1000);
     const capturedStep = seqStep;
-    setTimeout(() => { if (seqPlaying) setSeqVisStep(capturedStep); }, visualDelay);
+    const capturedBank = playBank;
+    setTimeout(() => {
+      if (!seqPlaying) return;
+      if (songOn && editBank !== capturedBank) setEditBank(capturedBank);
+      setSeqVisStep(capturedStep);
+      spawnSeqBurst(capturedBank, capturedStep);
+    }, visualDelay);
 
+    // Advance step; at loop boundary, advance the song
+    seqStep += 1;
+    if (seqStep >= SEQ_STEPS) {
+      seqStep = 0;
+      if (songOn) playBank = nextSongBank(playBank);
+    }
     seqNextTime += dur;
-    seqStep = (seqStep + 1) % SEQ_STEPS;
   }
 }
 
@@ -702,6 +760,7 @@ function seqStart() {
   ensureAudio();
   seqPlaying = true;
   seqStep = 0;
+  playBank = songOn ? songBankList()[0] : editBank;
   seqNextTime = ctx.currentTime + 0.05;
   seqTimerId = setInterval(seqSchedule, SCHED_MS);
   updateSeqPlayBtn();
@@ -722,6 +781,40 @@ function setSeqVisStep(step) {
   document.querySelectorAll('.seq-step').forEach(el => {
     const s = parseInt(el.dataset.step);
     el.classList.toggle('current', s === step);
+  });
+}
+
+// Record a live-played hit into the playing bank at the current step
+function recordHit(id) {
+  const step = seqVisStep;
+  if (step < 0) return;
+  banks[playBank][id][step] = 2;
+  if (editBank === playBank) {
+    const cell = document.querySelector(`.seq-step[data-id="${id}"][data-step="${step}"]`);
+    if (cell) paintCell(cell, 2);
+  }
+  saveSeq();
+}
+
+// Switch the grid to show a different bank (used by tabs + SONG follow)
+function setEditBank(i) {
+  editBank = i;
+  document.querySelectorAll('.bank-tab').forEach(t =>
+    t.classList.toggle('active', parseInt(t.dataset.bank) === i)
+  );
+  refreshSeqGrid();
+}
+
+function paintCell(cell, lv) {
+  cell.classList.toggle('on', lv > 0);
+  cell.classList.remove('vel-1', 'vel-2', 'vel-3');
+  if (lv > 0) cell.classList.add(`vel-${lv}`);
+}
+
+function refreshSeqGrid() {
+  const bank = banks[editBank];
+  document.querySelectorAll('.seq-step').forEach(cell => {
+    paintCell(cell, bank[cell.dataset.id][parseInt(cell.dataset.step)]);
   });
 }
 
@@ -767,7 +860,9 @@ function updateSwingSlider(slider) {
 
 function saveSeq() {
   try {
-    localStorage.setItem(SEQ_STORAGE_KEY, JSON.stringify({ pattern: seqPattern, bpm: seqBpm, swing: seqSwing }));
+    localStorage.setItem(SEQ_STORAGE_KEY, JSON.stringify({
+      banks, bpm: seqBpm, swing: seqSwing, song: songOn,
+    }));
   } catch (_) {}
 }
 
@@ -776,14 +871,160 @@ function loadSeq() {
     const raw = localStorage.getItem(SEQ_STORAGE_KEY);
     if (!raw) return;
     const d = JSON.parse(raw);
-    if (d.pattern) {
-      MIX_ORDER.forEach(id => {
-        if (Array.isArray(d.pattern[id])) seqPattern[id] = d.pattern[id].slice(0, SEQ_STEPS);
-      });
+    if (Array.isArray(d.banks)) {
+      for (let i = 0; i < NUM_BANKS; i++) {
+        if (!d.banks[i]) continue;
+        MIX_ORDER.forEach(id => {
+          if (Array.isArray(d.banks[i][id])) {
+            banks[i][id] = d.banks[i][id].slice(0, SEQ_STEPS).map(n => +n || 0);
+          }
+        });
+      }
     }
-    if (d.bpm)   seqBpm   = Math.max(40, Math.min(240, d.bpm));
+    if (d.bpm)   seqBpm = Math.max(40, Math.min(240, d.bpm));
     if (d.swing !== undefined) seqSwing = Math.max(0, Math.min(50, d.swing));
+    if (d.song)  songOn = true;
   } catch (_) {}
+}
+
+// =====================================================================
+// DEMO BEATS  — instant grooves. Notation: 16 chars, '.'=off 1/2/3=velocity
+// =====================================================================
+
+const DEMO_BEATS = {
+  'HIP-HOP': {
+    bpm: 88,  swing: 18,
+    p: { 'kick':'2..2..2...2..2..', 'snare':'....3.......3...', 'hihat-c':'2.22.22.2.22.2.2', 'clap':'....1.......1...' },
+  },
+  'HOUSE': {
+    bpm: 124, swing: 0,
+    p: { 'kick':'2...2...2...2...', 'clap':'....3.......3...', 'hihat-c':'..2...2...2...2.', 'hihat-o':'....2.......2...', 'snare':'................' },
+  },
+  'TRAP': {
+    bpm: 140, swing: 0,
+    p: { 'kick':'2.....2..2......', 'snare':'....3.......3...', 'hihat-c':'2222222322223222', 'clap':'....1.......1...' },
+  },
+  'ROCK': {
+    bpm: 120, swing: 0,
+    p: { 'kick':'2...2...2.2.2...', 'snare':'....3.......3...', 'hihat-c':'2.2.2.2.2.2.2.2.', 'crash':'3...............' },
+  },
+  'FUNK': {
+    bpm: 104, swing: 26,
+    p: { 'kick':'2..2.2..2..2.2..', 'snare':'....3..1....3.1.', 'hihat-c':'2.2.2.2.2.2.2.2.', 'hihat-o':'..2.......2.....' },
+  },
+  'BREAKBEAT': {
+    bpm: 132, swing: 10,
+    p: { 'kick':'2..2.....2.2....', 'snare':'....3.....3..3..', 'hihat-c':'2.2.2.2.2.2.2.2.', 'ride':'................' },
+  },
+  'REGGAETON': {
+    bpm: 96,  swing: 8,
+    p: { 'kick':'2..2..2..2..2..2', 'snare':'...3..3...3..3..', 'hihat-c':'2.2.2.2.2.2.2.2.', 'clap':'...1..1...1..1..' },
+  },
+  'DISCO': {
+    bpm: 118, swing: 0,
+    p: { 'kick':'2...2...2...2...', 'snare':'....3.......3...', 'hihat-o':'..2...2...2...2.', 'hihat-c':'2.2.2.2.2.2.2.2.' },
+  },
+};
+
+function parsePattern(str) {
+  const out = new Array(SEQ_STEPS).fill(0);
+  for (let i = 0; i < Math.min(SEQ_STEPS, str.length); i++) {
+    const c = str[i];
+    out[i] = (c === '1' || c === '2' || c === '3') ? +c : 0;
+  }
+  return out;
+}
+
+function loadDemo(name) {
+  const demo = DEMO_BEATS[name];
+  if (!demo) return;
+  const bank = makeEmptyBank();
+  for (const id of MIX_ORDER) {
+    if (demo.p[id]) bank[id] = parsePattern(demo.p[id]);
+  }
+  banks[editBank] = bank;
+  if (demo.bpm)  { seqBpm = demo.bpm; updateBpmDisplay(); }
+  if (demo.swing !== undefined) {
+    seqSwing = demo.swing;
+    const sl = document.querySelector('.seq-swing-slider');
+    if (sl) { sl.value = String(seqSwing); updateSwingSlider(sl); }
+    const sv = document.querySelector('.seq-swing-val');
+    if (sv) sv.textContent = `${seqSwing}%`;
+  }
+  refreshSeqGrid();
+  saveSeq();
+}
+
+// =====================================================================
+// SHARE  — encode the whole groove into a URL hash
+// =====================================================================
+
+function encodeBanks() {
+  return banks
+    .map(bk => MIX_ORDER.map(id => bk[id].join('')).join(','))
+    .join(';');
+}
+
+function decodeBanks(str) {
+  const result = Array.from({ length: NUM_BANKS }, makeEmptyBank);
+  str.split(';').forEach((bankStr, bi) => {
+    if (bi >= NUM_BANKS) return;
+    bankStr.split(',').forEach((rowStr, ri) => {
+      const id = MIX_ORDER[ri];
+      if (!id) return;
+      result[bi][id] = parsePattern(rowStr);
+    });
+  });
+  return result;
+}
+
+function buildShareURL() {
+  const state = `v2.${seqBpm}.${seqSwing}.${activePreset}.${encodeBanks()}`;
+  const base = location.href.split('#')[0];
+  return `${base}#${encodeURIComponent(state)}`;
+}
+
+function applyShareState(hash) {
+  try {
+    const raw = decodeURIComponent(hash);
+    if (!raw.startsWith('v2.')) return false;
+    const parts = raw.split('.');
+    // parts: ['v2', bpm, swing, preset, banksEncoded...] — banks may contain dots? no, digits only
+    const bpm    = parseInt(parts[1]);
+    const swing  = parseInt(parts[2]);
+    const preset = parts[3];
+    const banksStr = parts.slice(4).join('.');
+    if (!isNaN(bpm))   seqBpm   = Math.max(40, Math.min(240, bpm));
+    if (!isNaN(swing)) seqSwing = Math.max(0, Math.min(50, swing));
+    if (preset && PRESETS[preset]) activePreset = preset;
+    if (banksStr) banks = decodeBanks(banksStr);
+    return true;
+  } catch (_) { return false; }
+}
+
+function shareGroove() {
+  const url = buildShareURL();
+  history.replaceState(null, '', url);
+  const done = () => showToast('🔗 リンクをコピーしました');
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(url).then(done).catch(() => showToast('URLバーにリンクを生成しました'));
+  } else {
+    showToast('URLバーにリンクを生成しました');
+  }
+}
+
+let toastTimer = null;
+function showToast(msg) {
+  let el = document.getElementById('toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'toast';
+    document.body.append(el);
+  }
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2200);
 }
 
 // =====================================================================
@@ -855,6 +1096,12 @@ function idForKey(key) {
 function onKeyDown(e) {
   if (e.repeat) return;
   if (listening !== null) { handleAssign(e); return; }
+  // On the SEQ / VIZ views, spacebar runs the transport instead of the kick
+  if (e.key === ' ') {
+    const onSeq = !document.getElementById('seq-view').classList.contains('hidden');
+    const onViz = !document.getElementById('viz-view').classList.contains('hidden');
+    if (onSeq || onViz) { e.preventDefault(); seqToggle(); return; }
+  }
   const id = idForKey(e.key);
   if (id) { e.preventDefault(); trigger(id); }
 }
@@ -888,16 +1135,19 @@ function handleAssign(e) {
 // VIEW TOGGLE
 // =====================================================================
 
-const ALL_VIEWS = ['pad', 'kit', 'mix', 'seq'];
+const ALL_VIEWS = ['pad', 'kit', 'mix', 'seq', 'viz'];
 
 function switchView(view) {
   document.getElementById('kit-grid').classList.toggle('hidden', view !== 'pad');
   document.getElementById('kit-view').classList.toggle('hidden', view !== 'kit');
   document.getElementById('mix-view').classList.toggle('hidden', view !== 'mix');
   document.getElementById('seq-view').classList.toggle('hidden', view !== 'seq');
+  document.getElementById('viz-view').classList.toggle('hidden', view !== 'viz');
   document.querySelectorAll('.view-tab').forEach(t =>
     t.classList.toggle('active', t.dataset.view === view)
   );
+  if (view === 'viz') startViz();
+  else                stopViz();
 }
 
 // =====================================================================
@@ -1317,11 +1567,10 @@ function buildMixerView() {
 function buildSeqView() {
   const container = document.getElementById('seq-view');
 
-  // Transport bar
+  // ── Transport row 1: BPM · TAP · SWING · PLAY · CLEAR ──
   const transport = document.createElement('div');
   transport.className = 'seq-transport';
 
-  // BPM group
   const bpmGroup = document.createElement('div'); bpmGroup.className = 'seq-bpm-group';
   const bpmLabel = document.createElement('span');
   bpmLabel.style.cssText = 'font-family:var(--mono);font-size:0.6rem;font-weight:700;letter-spacing:.1em;color:var(--text-dim);';
@@ -1339,7 +1588,6 @@ function buildSeqView() {
 
   const div1 = document.createElement('div'); div1.className = 'seq-divider';
 
-  // Swing
   const swingGroup = document.createElement('div'); swingGroup.className = 'seq-swing-group';
   const swingLbl = document.createElement('span'); swingLbl.className = 'seq-swing-label'; swingLbl.textContent = 'SWING';
   const swingSl = document.createElement('input');
@@ -1356,25 +1604,92 @@ function buildSeqView() {
 
   const div2 = document.createElement('div'); div2.className = 'seq-divider';
 
-  // Play / Stop
   const playBtn = document.createElement('button');
   playBtn.className = 'seq-btn seq-play-btn'; playBtn.id = 'seq-play-btn'; playBtn.textContent = '▶ PLAY';
   playBtn.addEventListener('click', seqToggle);
 
   const clearBtn = document.createElement('button'); clearBtn.className = 'seq-btn'; clearBtn.textContent = 'CLEAR';
   clearBtn.addEventListener('click', () => {
-    MIX_ORDER.forEach(id => seqPattern[id].fill(false));
-    document.querySelectorAll('.seq-step.on').forEach(el => el.classList.remove('on'));
+    MIX_ORDER.forEach(id => banks[editBank][id].fill(0));
+    refreshSeqGrid();
     saveSeq();
   });
 
   transport.append(bpmGroup, tapBtn, div1, swingGroup, div2, playBtn, clearBtn);
   container.append(transport);
 
-  // Grid
+  // ── Transport row 2: BANKS · SONG · REC · DEMO · SHARE ──
+  const tools = document.createElement('div');
+  tools.className = 'seq-transport seq-transport-2';
+
+  const bankLbl = document.createElement('span'); bankLbl.className = 'seq-swing-label'; bankLbl.textContent = 'BANK';
+  const bankTabs = document.createElement('div'); bankTabs.className = 'bank-tabs';
+  for (let i = 0; i < NUM_BANKS; i++) {
+    const bt = document.createElement('button');
+    bt.className = 'bank-tab' + (i === editBank ? ' active' : '');
+    bt.dataset.bank = String(i);
+    bt.textContent = BANK_NAMES[i];
+    bt.addEventListener('click', () => { setEditBank(i); if (!seqPlaying) playBank = i; });
+    bankTabs.append(bt);
+  }
+
+  const div3 = document.createElement('div'); div3.className = 'seq-divider';
+
+  const songBtn = document.createElement('button');
+  songBtn.className = 'seq-btn seq-toggle-btn' + (songOn ? ' on' : '');
+  songBtn.id = 'seq-song-btn'; songBtn.textContent = 'SONG';
+  songBtn.title = 'A→B→C→D を順に再生（音のあるバンクだけ巡回）';
+  songBtn.addEventListener('click', () => {
+    songOn = !songOn;
+    songBtn.classList.toggle('on', songOn);
+    saveSeq();
+  });
+
+  const recBtn = document.createElement('button');
+  recBtn.className = 'seq-btn seq-rec-btn';
+  recBtn.id = 'seq-rec-btn'; recBtn.textContent = '● REC';
+  recBtn.title = '再生中にパッドを叩くと、その拍に録音されます';
+  recBtn.addEventListener('click', () => {
+    recOn = !recOn;
+    recBtn.classList.toggle('on', recOn);
+  });
+
+  const div4 = document.createElement('div'); div4.className = 'seq-divider';
+
+  const demoSel = document.createElement('select');
+  demoSel.className = 'seq-select';
+  const ph = document.createElement('option');
+  ph.value = ''; ph.textContent = 'DEMO ▾'; ph.disabled = true; ph.selected = true;
+  demoSel.append(ph);
+  Object.keys(DEMO_BEATS).forEach(name => {
+    const opt = document.createElement('option');
+    opt.value = name; opt.textContent = name;
+    demoSel.append(opt);
+  });
+  demoSel.addEventListener('change', () => {
+    if (demoSel.value) { ensureAudio(); loadDemo(demoSel.value); demoSel.selectedIndex = 0; }
+  });
+
+  const shareBtn = document.createElement('button');
+  shareBtn.className = 'seq-btn seq-share-btn'; shareBtn.textContent = '🔗 SHARE';
+  shareBtn.addEventListener('click', shareGroove);
+
+  tools.append(bankLbl, bankTabs, div3, songBtn, recBtn, div4, demoSel, shareBtn);
+  container.append(tools);
+
+  // ── Velocity legend ──
+  const legend = document.createElement('div');
+  legend.className = 'seq-legend';
+  legend.innerHTML =
+    '<span class="lg-swatch lg-ghost"></span>GHOST' +
+    '<span class="lg-swatch lg-normal"></span>NORMAL' +
+    '<span class="lg-swatch lg-accent"></span>ACCENT' +
+    '<span class="lg-hint">— セルをクリックで強さが切り替わります</span>';
+  container.append(legend);
+
+  // ── Step grid ──
   const gridWrap = document.createElement('div'); gridWrap.className = 'seq-grid';
 
-  // Step number header
   const header = document.createElement('div'); header.className = 'seq-step-header';
   const corner = document.createElement('div'); corner.className = 'seq-step-num';
   header.append(corner);
@@ -1386,7 +1701,6 @@ function buildSeqView() {
   }
   gridWrap.append(header);
 
-  // Instrument rows
   MIX_ORDER.forEach(id => {
     const color = PAD_COLORS[id];
     const row   = document.createElement('div'); row.className = 'seq-row';
@@ -1395,6 +1709,8 @@ function buildSeqView() {
     lbl.className = 'seq-row-label';
     lbl.textContent = SEQ_LABELS[id];
     lbl.style.color = color;
+    lbl.title = 'クリックで試聴';
+    lbl.addEventListener('click', () => trigger(id));
     row.append(lbl);
 
     for (let s = 0; s < SEQ_STEPS; s++) {
@@ -1403,12 +1719,14 @@ function buildSeqView() {
       cell.dataset.id   = id;
       cell.dataset.step = String(s);
       cell.style.setProperty('--ac', color);
-      if (seqPattern[id][s]) cell.classList.add('on');
+      paintCell(cell, banks[editBank][id][s]);
 
       cell.addEventListener('pointerdown', e => {
         e.preventDefault();
-        seqPattern[id][s] = !seqPattern[id][s];
-        cell.classList.toggle('on', seqPattern[id][s]);
+        const lv = VEL_CYCLE[banks[editBank][id][s]] ?? 2;
+        banks[editBank][id][s] = lv;
+        paintCell(cell, lv);
+        if (lv > 0) trigger(id, VEL[lv]);
         saveSeq();
       });
       row.append(cell);
@@ -1481,18 +1799,29 @@ function refreshBadge(id) {
 }
 
 function flashPad(id) {
+  let burstAt = null;
   const padEl = document.getElementById(`pad-${id}`);
   if (padEl) {
     padEl.classList.remove('active');
     void padEl.offsetWidth;
     padEl.classList.add('active');
+    if (!padEl.closest('.hidden')) {
+      const r = padEl.getBoundingClientRect();
+      burstAt = [r.left + r.width / 2, r.top + r.height / 2];
+    }
   }
   const kitEl = document.querySelector(`#kit-svg .kit-item[data-id="${id}"]`);
   if (kitEl) {
     kitEl.classList.remove('active');
     kitEl.getBoundingClientRect();
     kitEl.classList.add('active');
+    if (!burstAt && !document.getElementById('kit-view').classList.contains('hidden')) {
+      const r = kitEl.getBoundingClientRect();
+      burstAt = [r.left + r.width / 2, r.top + r.height / 2];
+    }
   }
+  if (burstAt) spawnBurst(burstAt[0], burstAt[1], PAD_COLORS[id], 1);
+  else         spawnBurst(window.innerWidth / 2, window.innerHeight * 0.5, PAD_COLORS[id], 1);
 }
 
 function startListening(id) {
@@ -1514,6 +1843,216 @@ function stopListening() {
 }
 
 // =====================================================================
+// PARTICLE BURSTS  — full-screen overlay, reacts to every hit
+// =====================================================================
+
+let burstCanvas = null, burstCtx = null, particles = [], burstRAF = null;
+
+function initBurstCanvas() {
+  burstCanvas = document.createElement('canvas');
+  burstCanvas.id = 'burst-canvas';
+  document.body.append(burstCanvas);
+  burstCtx = burstCanvas.getContext('2d');
+  sizeBurstCanvas();
+  window.addEventListener('resize', sizeBurstCanvas);
+}
+
+function sizeBurstCanvas() {
+  if (!burstCanvas) return;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  burstCanvas.width  = window.innerWidth  * dpr;
+  burstCanvas.height = window.innerHeight * dpr;
+  burstCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function spawnBurst(x, y, color, power = 1) {
+  if (!burstCtx) return;
+  const n = Math.round((10 + Math.random() * 8) * power);
+  for (let i = 0; i < n; i++) {
+    const ang   = Math.random() * Math.PI * 2;
+    const speed = (1.4 + Math.random() * 4.6) * power;
+    particles.push({
+      x, y,
+      vx: Math.cos(ang) * speed,
+      vy: Math.sin(ang) * speed - 0.6,
+      life: 1,
+      decay: 0.018 + Math.random() * 0.02,
+      size: (2 + Math.random() * 3) * power,
+      color,
+    });
+  }
+  // Central flash ring
+  particles.push({ x, y, vx: 0, vy: 0, life: 1, decay: 0.06, size: 8 * power, color, ring: true });
+  if (!burstRAF) burstRAF = requestAnimationFrame(renderBursts);
+}
+
+// Distribute sequencer-step bursts across the screen by instrument
+function spawnSeqBurst(bankIdx, step) {
+  const bank = banks[bankIdx];
+  MIX_ORDER.forEach((id, i) => {
+    if (bank[id][step] > 0) {
+      const x = window.innerWidth  * ((i + 0.5) / MIX_ORDER.length);
+      const y = window.innerHeight * (0.62 - bank[id][step] * 0.04);
+      spawnBurst(x, y, PAD_COLORS[id], 0.5 + bank[id][step] * 0.28);
+    }
+  });
+}
+
+function renderBursts() {
+  const w = window.innerWidth, h = window.innerHeight;
+  burstCtx.clearRect(0, 0, w, h);
+  burstCtx.globalCompositeOperation = 'lighter';
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.life -= p.decay;
+    if (p.life <= 0) { particles.splice(i, 1); continue; }
+    if (!p.ring) {
+      p.vy += 0.12;          // gravity
+      p.vx *= 0.97; p.vy *= 0.97;
+      p.x += p.vx; p.y += p.vy;
+    }
+    burstCtx.globalAlpha = Math.max(0, p.life);
+    if (p.ring) {
+      burstCtx.strokeStyle = p.color;
+      burstCtx.lineWidth = 2 * p.life;
+      burstCtx.beginPath();
+      burstCtx.arc(p.x, p.y, p.size * (1 + (1 - p.life) * 3.5), 0, Math.PI * 2);
+      burstCtx.stroke();
+    } else {
+      burstCtx.fillStyle = p.color;
+      burstCtx.beginPath();
+      burstCtx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+      burstCtx.fill();
+    }
+  }
+  burstCtx.globalAlpha = 1;
+  burstCtx.globalCompositeOperation = 'source-over';
+  if (particles.length > 0) burstRAF = requestAnimationFrame(renderBursts);
+  else burstRAF = null;
+}
+
+// =====================================================================
+// VISUALIZER  — immersive audio-reactive canvas (VIZ tab)
+// =====================================================================
+
+let vizCanvas = null, vizCtx = null, vizActive = false, vizRAF = null, vizPhase = 0;
+
+function initVizCanvas() {
+  vizCanvas = document.getElementById('viz-canvas');
+  if (!vizCanvas) return;
+  vizCtx = vizCanvas.getContext('2d');
+  sizeVizCanvas();
+  window.addEventListener('resize', sizeVizCanvas);
+}
+
+function sizeVizCanvas() {
+  if (!vizCanvas || vizCanvas.classList.contains('hidden')) {
+    // still size to parent so first paint is correct
+  }
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const rect = vizCanvas.getBoundingClientRect();
+  const w = rect.width || window.innerWidth;
+  const h = rect.height || (window.innerHeight * 0.6);
+  vizCanvas.width  = w * dpr;
+  vizCanvas.height = h * dpr;
+  vizCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function startViz() {
+  if (!vizCanvas) return;
+  ensureAudio();
+  sizeVizCanvas();
+  if (vizActive) return;
+  vizActive = true;
+  vizRAF = requestAnimationFrame(drawViz);
+}
+
+function stopViz() {
+  vizActive = false;
+  if (vizRAF) { cancelAnimationFrame(vizRAF); vizRAF = null; }
+}
+
+function drawViz() {
+  if (!vizActive) return;
+  vizRAF = requestAnimationFrame(drawViz);
+  if (!analyser) return;
+
+  const rect = vizCanvas.getBoundingClientRect();
+  const w = rect.width, h = rect.height;
+  const cx = w / 2, cy = h / 2;
+
+  analyser.getByteFrequencyData(freqData);
+  analyser.getByteTimeDomainData(timeData);
+
+  // Motion-blur trail
+  vizCtx.globalCompositeOperation = 'source-over';
+  vizCtx.fillStyle = 'rgba(10,10,13,0.26)';
+  vizCtx.fillRect(0, 0, w, h);
+
+  // Bass energy → core pulse
+  let bass = 0;
+  for (let i = 0; i < 10; i++) bass += freqData[i];
+  bass /= 10 * 255;
+  vizPhase += 0.01 + bass * 0.06;
+
+  const baseR = Math.min(w, h) * 0.13;
+  const coreR = baseR * (1 + bass * 0.9);
+
+  vizCtx.globalCompositeOperation = 'lighter';
+
+  // Radial frequency bars (rainbow)
+  const bars = 96;
+  const bins = analyser.frequencyBinCount;
+  for (let i = 0; i < bars; i++) {
+    const bin = Math.floor(Math.pow(i / bars, 1.6) * bins * 0.7);
+    const amp = freqData[bin] / 255;
+    const ang = (i / bars) * Math.PI * 2 + vizPhase;
+    const r0  = coreR + 6;
+    const r1  = r0 + amp * Math.min(w, h) * 0.34;
+    const hue = (i / bars) * 300 + vizPhase * 40;
+    vizCtx.strokeStyle = `hsl(${hue}, 90%, ${45 + amp * 35}%)`;
+    vizCtx.lineWidth = (Math.PI * 2 * r0) / bars * 0.7;
+    vizCtx.beginPath();
+    vizCtx.moveTo(cx + Math.cos(ang) * r0, cy + Math.sin(ang) * r0);
+    vizCtx.lineTo(cx + Math.cos(ang) * r1, cy + Math.sin(ang) * r1);
+    vizCtx.stroke();
+    // mirror for symmetry
+    const ang2 = -ang + vizPhase * 2;
+    vizCtx.beginPath();
+    vizCtx.moveTo(cx + Math.cos(ang2) * r0, cy + Math.sin(ang2) * r0);
+    vizCtx.lineTo(cx + Math.cos(ang2) * r1, cy + Math.sin(ang2) * r1);
+    vizCtx.stroke();
+  }
+
+  // Waveform ring
+  vizCtx.strokeStyle = `hsla(${(vizPhase * 50) % 360}, 80%, 70%, 0.8)`;
+  vizCtx.lineWidth = 1.5;
+  vizCtx.beginPath();
+  const wlen = timeData.length;
+  for (let i = 0; i <= wlen; i++) {
+    const idx = i % wlen;
+    const v = (timeData[idx] - 128) / 128;
+    const ang = (i / wlen) * Math.PI * 2;
+    const r = coreR * 0.78 + v * baseR * 0.6;
+    const x = cx + Math.cos(ang) * r, y = cy + Math.sin(ang) * r;
+    i === 0 ? vizCtx.moveTo(x, y) : vizCtx.lineTo(x, y);
+  }
+  vizCtx.stroke();
+
+  // Glowing core
+  const grad = vizCtx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
+  const hue = (vizPhase * 60) % 360;
+  grad.addColorStop(0, `hsla(${hue}, 95%, 70%, ${0.5 + bass * 0.5})`);
+  grad.addColorStop(1, `hsla(${hue + 60}, 95%, 50%, 0)`);
+  vizCtx.fillStyle = grad;
+  vizCtx.beginPath();
+  vizCtx.arc(cx, cy, coreR, 0, Math.PI * 2);
+  vizCtx.fill();
+
+  vizCtx.globalCompositeOperation = 'source-over';
+}
+
+// =====================================================================
 // BOOTSTRAP
 // =====================================================================
 
@@ -1529,10 +2068,19 @@ document.addEventListener('DOMContentLoaded', () => {
     if (saved && PRESETS[saved]) activePreset = saved;
   } catch (_) {}
 
+  // A shared groove in the URL hash overrides saved state
+  if (location.hash.length > 1) {
+    if (applyShareState(location.hash.slice(1))) {
+      showToast('🎧 共有されたビートを読み込みました');
+    }
+  }
+
   buildPads();
   initKitView();
   buildMixerView();
   buildSeqView();
+  initBurstCanvas();
+  initVizCanvas();
 
   // Set initial preset button state
   document.querySelectorAll('.preset-btn').forEach(b =>
