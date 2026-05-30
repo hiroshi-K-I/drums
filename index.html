@@ -19,6 +19,7 @@
         <button class="view-tab" data-view="kit">KIT</button>
         <button class="view-tab" data-view="mix">MIX</button>
         <button class="view-tab" data-view="seq">SEQ</button>
+        <button class="view-tab" data-view="viz">VIZ</button>
       </div>
       <div id="preset-row">
         <button class="preset-btn active" data-preset="acoustic">ACOUSTIC</button>
@@ -39,6 +40,10 @@
     </div>
     <div id="seq-view" class="hidden">
       <!-- step sequencer is built by app.js -->
+    </div>
+    <div id="viz-view" class="hidden">
+      <canvas id="viz-canvas"></canvas>
+      <p id="viz-hint">PAD や SEQ で音を鳴らすと反応します &nbsp;·&nbsp; Space で再生/停止</p>
     </div>
   </div>
 
