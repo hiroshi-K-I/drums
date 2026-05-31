@@ -181,38 +181,55 @@ function setDelayFeedback(pct) { fxState.delayFeedback = pct;  if (delayFeedback
 // =====================================================================
 
 function synthKick(v, t) {
+  // Body: low-mid "thump". Pitch settles higher (52Hz) than before so the
+  // fundamental stays audible — a solid "ド" instead of a hollow "ポム".
   const body    = ctx.createOscillator();
   const shaper  = ctx.createWaveShaper();
   const bodyEnv = ctx.createGain();
   body.type = 'sine';
-  body.frequency.setValueAtTime(120, t);
-  body.frequency.exponentialRampToValueAtTime(36, t + 0.14);
+  body.frequency.setValueAtTime(110, t);
+  body.frequency.exponentialRampToValueAtTime(52, t + 0.09);
   const sc = new Float32Array(256);
-  for (let i = 0; i < 256; i++) { const x = (i / 128) - 1; sc[i] = Math.tanh(x * 2.2); }
+  // More drive → richer harmonics → reads as weight on small speakers.
+  for (let i = 0; i < 256; i++) { const x = (i / 128) - 1; sc[i] = Math.tanh(x * 2.8); }
   shaper.curve = sc;
-  bodyEnv.gain.setValueAtTime(v * 2.5, t);
-  bodyEnv.gain.exponentialRampToValueAtTime(0.001, t + 0.58);
+  bodyEnv.gain.setValueAtTime(v * 2.7, t);
+  bodyEnv.gain.exponentialRampToValueAtTime(0.001, t + 0.44);
   body.connect(shaper); shaper.connect(bodyEnv); bodyEnv.connect(masterOut);
-  body.start(t); body.stop(t + 0.62);
+  body.start(t); body.stop(t + 0.48);
 
+  // Sub: deep weight that rings on — the "ズーッ" tail. Settles at 42Hz
+  // (not 28Hz) so it's felt as heft rather than disappearing.
   const sub    = ctx.createOscillator();
   const subEnv = ctx.createGain();
   sub.type = 'sine';
-  sub.frequency.setValueAtTime(50, t);
-  sub.frequency.exponentialRampToValueAtTime(28, t + 0.5);
-  subEnv.gain.setValueAtTime(v * 0.95, t);
-  subEnv.gain.exponentialRampToValueAtTime(0.001, t + 0.78);
+  sub.frequency.setValueAtTime(58, t);
+  sub.frequency.exponentialRampToValueAtTime(42, t + 0.5);
+  subEnv.gain.setValueAtTime(v * 1.3, t);
+  subEnv.gain.exponentialRampToValueAtTime(0.001, t + 0.95);
   sub.connect(subEnv); subEnv.connect(masterOut);
-  sub.start(t); sub.stop(t + 0.82);
+  sub.start(t); sub.stop(t + 1.0);
 
+  // Low thud: the skin/shell body of the hit.
   const thud    = mkNoise();
   const lpf     = ctx.createBiquadFilter();
   const thudEnv = ctx.createGain();
-  lpf.type = 'lowpass'; lpf.frequency.value = 180; lpf.Q.value = 0.8;
-  thudEnv.gain.setValueAtTime(v * 1.8, t);
-  thudEnv.gain.exponentialRampToValueAtTime(0.001, t + 0.055);
+  lpf.type = 'lowpass'; lpf.frequency.value = 160; lpf.Q.value = 0.8;
+  thudEnv.gain.setValueAtTime(v * 1.7, t);
+  thudEnv.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
   thud.connect(lpf); lpf.connect(thudEnv); thudEnv.connect(masterOut);
-  thud.start(t); thud.stop(t + 0.065);
+  thud.start(t); thud.stop(t + 0.08);
+
+  // Beater attack: a short mid transient that gives the hit definition and
+  // punch so the low end doesn't read as muddy.
+  const click    = mkNoise();
+  const cbpf     = ctx.createBiquadFilter();
+  const clickEnv = ctx.createGain();
+  cbpf.type = 'bandpass'; cbpf.frequency.value = 1800; cbpf.Q.value = 0.9;
+  clickEnv.gain.setValueAtTime(v * 0.45, t);
+  clickEnv.gain.exponentialRampToValueAtTime(0.001, t + 0.022);
+  click.connect(cbpf); cbpf.connect(clickEnv); clickEnv.connect(masterOut);
+  click.start(t); click.stop(t + 0.03);
 }
 
 function synthSnare(v, t) {
