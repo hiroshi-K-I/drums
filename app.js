@@ -29,6 +29,7 @@ const VOL_STORAGE_KEY = 'drumkit-v1-volumes';
 const FX_STORAGE_KEY  = 'drumkit-v1-fx';
 const SEQ_STORAGE_KEY = 'drumkit-v2-seq';   // v2: banks + velocity
 const PRESET_KEY      = 'drumkit-v1-preset';
+const KICK_STORAGE_KEY = 'drumkit-v1-kick';
 
 const PAD_COLORS = {
   'crash':   '#eab308',
@@ -82,6 +83,12 @@ const DELAY_TIMES = { '1/16': 0, '1/8': 1, '1/4': 2, '3/8': 3 };
 const DELAY_MS    = [125, 250, 500, 375]; // ms at 120 BPM; user can also sync to SEQ BPM
 
 let fxState = { reverbWet: 20, reverbSize: 60, delayWet: 0, delayTimeIdx: 1, delayFeedback: 30 };
+
+// Acoustic kick tuning (MIX view → KICK TUNE). 0–100 each; 50 = stock sound.
+// depth  = how far the low end sinks, attack = beater click strength,
+// tail   = length of the sub ring-out.
+const KICK_TUNE_DEFAULT = { depth: 50, attack: 50, tail: 50 };
+let kickTune = { ...KICK_TUNE_DEFAULT };
 
 function ensureAudio() {
   if (ctx) {
@@ -181,14 +188,24 @@ function setDelayFeedback(pct) { fxState.delayFeedback = pct;  if (delayFeedback
 // =====================================================================
 
 function synthKick(v, t) {
-  // Body: low-mid "thump". Pitch settles higher (52Hz) than before so the
-  // fundamental stays audible — a solid "ド" instead of a hollow "ポム".
+  // Tuning knobs (0–100, 50 = stock). Mapped so the stock numbers below match
+  // the well-balanced "ドズッッ" voicing.
+  const d  = kickTune.depth  / 100;   // deeper = lower settle frequencies
+  const a  = kickTune.attack / 100;   // beater click level
+  const ta = kickTune.tail   / 100;   // sub ring-out length
+  const bodyEndHz = 64 - d * 24;      // d=.5 → 52Hz
+  const subEndHz  = 55 - d * 26;      // d=.5 → 42Hz
+  const clickGain = a * 0.9;          // a=.5 → 0.45 ; a=0 → silent
+  const subDecay  = 0.4 + ta * 1.1;   // ta=.5 → 0.95s
+
+  // Body: low-mid "thump". Pitch settles high enough that the fundamental
+  // stays audible — a solid "ド" instead of a hollow "ポム".
   const body    = ctx.createOscillator();
   const shaper  = ctx.createWaveShaper();
   const bodyEnv = ctx.createGain();
   body.type = 'sine';
   body.frequency.setValueAtTime(110, t);
-  body.frequency.exponentialRampToValueAtTime(52, t + 0.09);
+  body.frequency.exponentialRampToValueAtTime(bodyEndHz, t + 0.09);
   const sc = new Float32Array(256);
   // More drive → richer harmonics → reads as weight on small speakers.
   for (let i = 0; i < 256; i++) { const x = (i / 128) - 1; sc[i] = Math.tanh(x * 2.8); }
@@ -198,17 +215,16 @@ function synthKick(v, t) {
   body.connect(shaper); shaper.connect(bodyEnv); bodyEnv.connect(masterOut);
   body.start(t); body.stop(t + 0.48);
 
-  // Sub: deep weight that rings on — the "ズーッ" tail. Settles at 42Hz
-  // (not 28Hz) so it's felt as heft rather than disappearing.
+  // Sub: deep weight that rings on — the "ズーッ" tail.
   const sub    = ctx.createOscillator();
   const subEnv = ctx.createGain();
   sub.type = 'sine';
   sub.frequency.setValueAtTime(58, t);
-  sub.frequency.exponentialRampToValueAtTime(42, t + 0.5);
+  sub.frequency.exponentialRampToValueAtTime(subEndHz, t + 0.5);
   subEnv.gain.setValueAtTime(v * 1.3, t);
-  subEnv.gain.exponentialRampToValueAtTime(0.001, t + 0.95);
+  subEnv.gain.exponentialRampToValueAtTime(0.001, t + subDecay);
   sub.connect(subEnv); subEnv.connect(masterOut);
-  sub.start(t); sub.stop(t + 1.0);
+  sub.start(t); sub.stop(t + subDecay + 0.05);
 
   // Low thud: the skin/shell body of the hit.
   const thud    = mkNoise();
@@ -221,15 +237,18 @@ function synthKick(v, t) {
   thud.start(t); thud.stop(t + 0.08);
 
   // Beater attack: a short mid transient that gives the hit definition and
-  // punch so the low end doesn't read as muddy.
-  const click    = mkNoise();
-  const cbpf     = ctx.createBiquadFilter();
-  const clickEnv = ctx.createGain();
-  cbpf.type = 'bandpass'; cbpf.frequency.value = 1800; cbpf.Q.value = 0.9;
-  clickEnv.gain.setValueAtTime(v * 0.45, t);
-  clickEnv.gain.exponentialRampToValueAtTime(0.001, t + 0.022);
-  click.connect(cbpf); cbpf.connect(clickEnv); clickEnv.connect(masterOut);
-  click.start(t); click.stop(t + 0.03);
+  // punch so the low end doesn't read as muddy. Skipped when turned all the
+  // way down.
+  if (clickGain > 0.001) {
+    const click    = mkNoise();
+    const cbpf     = ctx.createBiquadFilter();
+    const clickEnv = ctx.createGain();
+    cbpf.type = 'bandpass'; cbpf.frequency.value = 1800; cbpf.Q.value = 0.9;
+    clickEnv.gain.setValueAtTime(v * clickGain, t);
+    clickEnv.gain.exponentialRampToValueAtTime(0.001, t + 0.022);
+    click.connect(cbpf); cbpf.connect(clickEnv); clickEnv.connect(masterOut);
+    click.start(t); click.stop(t + 0.03);
+  }
 }
 
 function synthSnare(v, t) {
@@ -1076,6 +1095,17 @@ function saveFX() {
   try { localStorage.setItem(FX_STORAGE_KEY, JSON.stringify(fxState)); } catch (_) {}
 }
 
+function loadKickTune() {
+  try {
+    const raw = localStorage.getItem(KICK_STORAGE_KEY);
+    if (raw) kickTune = { ...kickTune, ...JSON.parse(raw) };
+  } catch (_) {}
+}
+
+function saveKickTune() {
+  try { localStorage.setItem(KICK_STORAGE_KEY, JSON.stringify(kickTune)); } catch (_) {}
+}
+
 // =====================================================================
 // KEY BINDINGS
 // =====================================================================
@@ -1575,6 +1605,53 @@ function buildMixerView() {
 
   fxBlock.append(rvWetRow, rvSzRow, dlWetRow, dlTimeRow, dlFbRow);
   container.append(fxBlock);
+
+  // ── KICK TUNE section (acoustic kick only) ──
+  const ktLabel = document.createElement('div');
+  ktLabel.className = 'mix-section-label';
+  ktLabel.textContent = 'KICK TUNE';
+  container.append(ktLabel);
+
+  const ktBlock = document.createElement('div');
+  ktBlock.className = 'mix-fx-block';
+  const kickColor = PAD_COLORS['kick'];
+
+  const ktRows = [];
+  const makeKickRow = (key, labelText) => {
+    const row = document.createElement('div'); row.className = 'mix-fx-row';
+    const lbl = document.createElement('span'); lbl.className = 'mix-fx-label'; lbl.textContent = labelText;
+    const sl  = makeFXSlider(0, 100, kickTune[key], kickColor);
+    const val = document.createElement('span'); val.className = 'mix-fx-val'; val.textContent = `${kickTune[key]}%`;
+    sl.addEventListener('input', () => {
+      kickTune[key] = parseInt(sl.value);
+      val.textContent = `${sl.value}%`;
+      updateSliderFill(sl); saveKickTune();
+    });
+    row.append(lbl, sl, val);
+    ktBlock.append(row);
+    ktRows.push({ key, sl, val });
+  };
+  makeKickRow('depth',  'DEPTH');   // 沈み具合
+  makeKickRow('attack', 'ATTACK');  // アタックの強さ
+  makeKickRow('tail',   'TAIL');    // 余韻の長さ
+
+  const ktResetRow = document.createElement('div');
+  ktResetRow.style.cssText = 'display:flex;justify-content:flex-end;';
+  const ktResetBtn = document.createElement('button');
+  ktResetBtn.className = 'mix-reset'; ktResetBtn.textContent = '↺ RESET'; ktResetBtn.title = 'Reset kick';
+  ktResetBtn.addEventListener('click', () => {
+    kickTune = { ...KICK_TUNE_DEFAULT };
+    ktRows.forEach(({ key, sl, val }) => {
+      sl.value = String(kickTune[key]);
+      val.textContent = `${kickTune[key]}%`;
+      updateSliderFill(sl);
+    });
+    saveKickTune();
+  });
+  ktResetRow.append(ktResetBtn);
+  ktBlock.append(ktResetRow);
+
+  container.append(ktBlock);
 }
 
 // =====================================================================
@@ -2077,6 +2154,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadBindings();
   loadVolumes();
   loadFX();
+  loadKickTune();
   loadSeq();
 
   // Restore preset
